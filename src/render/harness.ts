@@ -234,7 +234,9 @@ async function main(): Promise<void> {
   let minuteAcc = 0;
   const tmp = new Float64Array(3);
   let fps = 0, fpsN = 0, fpsT = last, frameMs = 0;
+  let running = true;
   const loop = (now: number) => {
+    if (!running) return;
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     spawnSome(250);
@@ -296,6 +298,16 @@ async function main(): Promise<void> {
   (window as unknown as Record<string, unknown>).harness = {
     game, renderer, city, map: (renderer as unknown as { map: unknown }).map,
     ready: () => city.traffic.active >= TARGET * 0.95,
+    /** stop simulation + frame updates (for screenshots with software GL) */
+    stop: () => {
+      running = false;
+    },
+    start: () => {
+      if (running) return;
+      running = true;
+      last = performance.now();
+      requestAnimationFrame(loop);
+    },
   };
 }
 

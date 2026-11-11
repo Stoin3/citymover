@@ -11,7 +11,7 @@ import { loadCityData, loadCorridor, type CorridorData } from '../osm/loader';
 import { toX, toY } from '../geo';
 import { CitySim, type Accident } from '../sim/city';
 import { RoadGraph, type RouteKind } from '../sim/graph';
-import { PassengerPool, P_WALK_TO_STOP, P_WAITING, P_RIDING, P_WALK_TO_DEST } from '../sim/agents';
+import { PassengerPool, PaxQueue, P_WALK_TO_STOP, P_WAITING, P_RIDING, P_WALK_TO_DEST } from '../sim/agents';
 import {
   Line, Stop, buildLineRoute, routePoint, newLineData, type LineData, type StopData, type Vehicle, type RouteContext,
 } from '../sim/transit';
@@ -29,8 +29,14 @@ export interface DataProvider {
 
 const defaultProvider: DataProvider = { city: loadCityData, corridor: loadCorridor };
 
-const MAX_PASSENGERS = 60_000;
-const PATHS_PER_FRAME = 10;
+const MAX_PASSENGERS = 150_000;
+/** wall-clock budget (ms) per frame for building car/bike route trees */
+const ROUTE_MS_SLOW = 1.5;
+const ROUTE_MS_FAST = 3;
+/** wall-clock budget (ms) for all simulation work in one frame; excess game time is dropped */
+const FRAME_BUDGET_MS = 12;
+/** simulation sub-step (game seconds) */
+const SUBSTEP = 3;
 
 const LINE_PREFIX: Record<ModeId, string> = { bus: '', tram: 'T', metro: 'M', train: 'IC', coach: 'X', plane: 'VL' };
 const PALETTE: [number, number, number][] = [
@@ -87,7 +93,11 @@ export class Game implements IGame {
   ledgerToday: Ledger = emptyLedger();
   ledgerYesterday: Ledger = emptyLedger();
   totalDelivered = 0;
-  maxEntities = 12000;
+  maxEntities = 25000;
+  /** game speed actually achieved (lower than `speed` when the CPU can't keep up) */
+  effectiveSpeed = 1;
+  /** last frame's simulation time (ms) */
+  frameMs = 0;
   nextId = 1;
   intercity: Intercity;
 
@@ -97,7 +107,6 @@ export class Game implements IGame {
   private lastNetTime = -1e9;
   private lastLevel = 1;
   private vehicleSeq = 0;
-  private budget = { n: 0 };
   private tmp = new Float64Array(3);
   private onTransitFns: ((o: number, d: number, ox: number, oy: number, dx: number, dy: number) => boolean)[] = [];
   private onAccidentFn = (a: Accident) => this.cityAccident(a);
@@ -212,6 +221,7 @@ export class Game implements IGame {
 
   private addCity(def: CityDef, data: CityData): CitySim {
     const c = new CitySim(def, data, this.cities.length);
+    c.warmRoutes(120, this.time);
     this.cities.push(c);
     this.onTransitFns.push((o, d, ox, oy, dx, dy) => this.spawnLocalTransit(c, o, d, ox, oy, dx, dy));
     return c;
@@ -634,8 +644,11 @@ export class Game implements IGame {
     this.purgeVehicles();
     for (const dir of line.dirs)
       for (const q of dir.waiting) {
-        for (const p of q) if (P.state[p] === P_WAITING) this.fail(p);
-        q.length = 0;
+        for (let i = 0, n = q.length; i < n; i++) {
+          const p = q.at(i);
+          if (P.state[p] === P_WAITING) this.fail(p);
+        }
+        q.clear();
       }
   }
 
@@ -893,15 +906,26 @@ export class Game implements IGame {
 
   tick(realDtSec: number): void {
     if (!(realDtSec > 0) || !(this.speed > 0)) return;
+    const t0 = performance.now();
     const real = Math.min(realDtSec, 0.1);
     const simDt = real * this.speed * 60;
-    const n = Math.max(1, Math.ceil(simDt / 3));
+    const n = Math.max(1, Math.ceil(simDt / SUBSTEP));
     const dt = simDt / n;
-    // car/bike path searches per frame, fewer on big road graphs (cost per search ~ graph size)
-    let nJ = 0;
-    for (const c of this.cities) nJ += c.G.nJ;
-    this.budget.n = Math.max(3, Math.min(PATHS_PER_FRAME, Math.round(40000 / Math.max(1, nJ))));
-    for (let i = 0; i < n; i++) this.step(dt);
+    // background route tree building, bounded in wall-clock time
+    const routeMs = this.speed <= 3 ? ROUTE_MS_SLOW : ROUTE_MS_FAST;
+    const per = routeMs / Math.max(1, this.cities.length);
+    for (const c of this.cities) c.router.work(performance.now() + per, this.time);
+    let done = 0;
+    for (let i = 0; i < n; i++) {
+      this.step(dt);
+      done++;
+      // never freeze the browser: drop the rest of this frame's game time when over budget
+      if (performance.now() - t0 > FRAME_BUDGET_MS) break;
+    }
+    for (const c of this.cities) c.updateTrafficPositions();
+    const ach = (this.speed * done) / n;
+    this.effectiveSpeed = this.effectiveSpeed * 0.9 + ach * 0.1;
+    this.frameMs = performance.now() - t0;
   }
 
   private step(dt: number): void {
@@ -910,8 +934,8 @@ export class Game implements IGame {
     const now = this.time;
     const dtMin = dt / 60;
     for (const c of this.cities) {
-      c.generateTrips(now, dtMin, this.budget, this.maxEntities, this.onTransitFns[c.index]);
-      c.tickTraffic(dt, now, this.onAccidentFn);
+      c.generateTrips(now, dtMin, this.maxEntities, this.onTransitFns[c.index]);
+      c.tickTraffic(dt, now, this.onAccidentFn, false);
     }
     this.dispatch();
     this.moveVehicles(dt);
@@ -937,6 +961,7 @@ export class Game implements IGame {
     if (this.netDirty || block !== this.net.block || now - this.lastNetTime >= 30) this.rebuildNet();
     this.intercity.minute(now);
     this.updateStopWaiting();
+    this.passengers.trim();
     this.checkLevel();
   }
 
@@ -1199,12 +1224,14 @@ export class Game implements IGame {
     }
     // board
     let board = 0;
+    let left = 0;
     const q = dir.waiting[k];
     if (q && q.length) {
       const cap = def.capacity;
       let i = 0;
-      while (i < q.length && pax.length < cap) {
-        const p = q[i++];
+      const n = q.length;
+      while (i < n && pax.length < cap) {
+        const p = q.at(i++);
         if (P.state[p] !== P_WAITING) continue;
         const plan = P.plans[p]!;
         const lg = P.leg[p] * 4;
@@ -1220,10 +1247,12 @@ export class Game implements IGame {
         pax.push(p);
         board++;
       }
-      q.splice(0, i);
+      q.shift(i);
+      left = q.length;
       stop.boardedToday += board;
     }
-    line.loadSum += pax.length / def.capacity;
+    // passengers left behind at the stop make the line feel (and count as) overcrowded
+    line.loadSum += Math.min(2, (pax.length + left) / def.capacity);
     line.loadSamples++;
     v.nextStop = k + 1;
     v.dwell = def.dwell + 1.2 * (alight + board);
@@ -1264,7 +1293,7 @@ export class Game implements IGame {
       const oc = this.cities[P.city[p]];
       if (oc) {
         oc.stats.delivered++;
-        oc.reputation = Math.min(100, oc.reputation + 0.003);
+        oc.reputation = Math.min(100, oc.reputation + 0.0003);
       }
       const dc = P.destCity[p] >= 0 ? this.cities[P.destCity[p]] : undefined;
       P.release(p);
@@ -1323,7 +1352,7 @@ export class Game implements IGame {
     this.startWaiting(i, dir.waiting[k], stop);
   }
 
-  private startWaiting(i: number, q: number[], stop: Stop): void {
+  private startWaiting(i: number, q: PaxQueue, stop: Stop): void {
     const P = this.passengers;
     P.state[i] = P_WAITING;
     P.waitStart[i] = this.time;
@@ -1339,7 +1368,7 @@ export class Game implements IGame {
     const c = this.cities[P.city[i]];
     if (c) {
       c.stats.delivered++;
-      c.reputation = Math.min(100, c.reputation + 0.003);
+      c.reputation = Math.min(100, c.reputation + 0.0003);
     }
     P.release(i);
   }
@@ -1351,14 +1380,15 @@ export class Game implements IGame {
         for (const q of dir.waiting) {
           if (!q.length) continue;
           let i = 0;
-          while (i < q.length && now - P.waitStart[q[i]] > MAX_WAIT_MIN) {
-            const p = q[i++];
+          const n = q.length;
+          while (i < n && now - P.waitStart[q.at(i)] > MAX_WAIT_MIN) {
+            const p = q.at(i++);
             if (P.state[p] !== P_WAITING) continue;
             const c = this.cities[P.city[p]];
-            if (c) c.reputation = Math.max(0, c.reputation - 0.02);
+            if (c) c.reputation = Math.max(0, c.reputation - 0.002);
             this.fail(p);
           }
-          if (i) q.splice(0, i);
+          if (i) q.shift(i);
         }
   }
 

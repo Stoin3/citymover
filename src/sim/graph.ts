@@ -426,5 +426,6 @@ export class RoadGraph {
   }
 }
 
-// Each simulated car agent represents this many real cars for congestion purposes.
-export const CAR_WEIGHT = 6;
+// Each simulated car agent represents this many real cars for congestion purposes
+// (agents are ~1:1 with real trips; the extra accounts for through/freight traffic).
+export const CAR_WEIGHT = 1.3;

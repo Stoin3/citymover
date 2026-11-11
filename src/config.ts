@@ -129,7 +129,7 @@ export function cityUnlockCost(population: number): number {
 export const START_MONEY = 1_500_000;
 
 // Simulation scale: number of simulated trips per resident per day.
-export const TRIPS_PER_RESIDENT = 0.26;
+export const TRIPS_PER_RESIDENT = 2.3;
 
 // Behaviour (logit) parameters, utilities in "minutes".
 export const VALUE_OF_TIME = 0.2; // € per minute (12 €/h)

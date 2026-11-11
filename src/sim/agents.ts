@@ -88,6 +88,52 @@ export class PassengerPool {
     this.active--;
     this.free.push(i);
   }
+
+  /** lower the high-water mark when the top slots are free (call occasionally) */
+  trim(): void {
+    let c = this.count;
+    while (c > 0 && this.state[c - 1] === P_FREE) c--;
+    if (c !== this.count) {
+      this.count = c;
+      this.free = this.free.filter((i) => i < c);
+    }
+  }
+}
+
+/** FIFO queue of passenger ids (amortised O(1) push / shift, no per-call allocation). */
+export class PaxQueue {
+  buf = new Int32Array(8);
+  head = 0;
+  tail = 0;
+  get length(): number {
+    return this.tail - this.head;
+  }
+  at(i: number): number {
+    return this.buf[this.head + i];
+  }
+  push(p: number): void {
+    if (this.tail >= this.buf.length) {
+      const n = this.tail - this.head;
+      if (this.head > 0 && n < this.buf.length >> 1) {
+        this.buf.copyWithin(0, this.head, this.tail);
+      } else {
+        const b = new Int32Array(this.buf.length * 2);
+        b.set(this.buf.subarray(this.head, this.tail));
+        this.buf = b;
+      }
+      this.head = 0;
+      this.tail = n;
+    }
+    this.buf[this.tail++] = p;
+  }
+  /** drop the first n entries */
+  shift(n: number): void {
+    this.head += n;
+    if (this.head >= this.tail) this.head = this.tail = 0;
+  }
+  clear(): void {
+    this.head = this.tail = 0;
+  }
 }
 
 /** Cars and bikes driving on the road graph. */
@@ -160,5 +206,15 @@ export class TrafficPool {
     this.paths[i] = null;
     this.active--;
     this.free.push(i);
+  }
+
+  /** lower the high-water mark when the top slots are free (call occasionally) */
+  trim(): void {
+    let c = this.count;
+    while (c > 0 && !this.alive[c - 1]) c--;
+    if (c !== this.count) {
+      this.count = c;
+      this.free = this.free.filter((i) => i < c);
+    }
   }
 }

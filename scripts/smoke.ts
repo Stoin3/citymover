@@ -105,7 +105,56 @@ function instrument(g: Game) {
   return buckets;
 }
 
-function run(g: Game, days: number, label: string, onDay?: (d: number) => void): number {
+interface Peaks {
+  cars: number;
+  bikes: number;
+  walk: number;
+  wait: number;
+  ride: number;
+  pax: number;
+}
+
+function sample(g: Game, pk: Peaks): void {
+  let cars = 0,
+    bikes = 0;
+  for (const c of g.cities.slice(0, 1)) {
+    const T = c.traffic;
+    for (let i = 0; i < T.count; i++) if (T.alive[i]) (T.mode[i] === 1 ? bikes++ : cars++);
+  }
+  const P = g.passengers;
+  const cnt = [0, 0, 0, 0, 0];
+  for (let i = 0; i < P.count; i++) cnt[P.state[i]]++;
+  const walk = cnt[P_WALK_TO_STOP] + cnt[P_WALK_TO_DEST];
+  pk.cars = Math.max(pk.cars, cars);
+  pk.bikes = Math.max(pk.bikes, bikes);
+  pk.walk = Math.max(pk.walk, walk);
+  pk.wait = Math.max(pk.wait, cnt[P_WAITING]);
+  pk.ride = Math.max(pk.ride, cnt[P_RIDING]);
+  pk.pax = Math.max(pk.pax, walk + cnt[P_WAITING] + cnt[P_RIDING]);
+}
+
+/** emulate browser frames (1/60 s) at a game speed; returns frame time stats */
+function bench(g: Game, speed: number, frames: number, label: string): void {
+  const prev = g.speed;
+  g.speed = speed;
+  const ts: number[] = [];
+  const h0 = g.hour();
+  for (let i = 0; i < frames; i++) {
+    const t = performance.now();
+    g.tick(1 / 60);
+    ts.push(performance.now() - t);
+  }
+  g.speed = prev;
+  ts.sort((a, b) => a - b);
+  const avg = ts.reduce((a, b) => a + b, 0) / ts.length;
+  const c = g.cities[0];
+  console.log(
+    `  [${label}] FRAME speed ${speed}: ${frames} frames ${h0.toFixed(2)}h-${g.hour().toFixed(2)}h | avg ${avg.toFixed(2)} ms, p50 ${ts[ts.length >> 1].toFixed(2)}, p95 ${ts[Math.floor(ts.length * 0.95)].toFixed(2)}, max ${ts[ts.length - 1].toFixed(2)} ms` +
+      ` | effective speed ${g.effectiveSpeed.toFixed(1)} | cars+bikes ${c.traffic.active}, pax ${g.passengers.active}`,
+  );
+}
+
+function run(g: Game, days: number, label: string, onDay?: (d: number) => void, benchAt = -1): number {
   let accidents = 0;
   const unsub = g.on('accident', () => accidents++);
   const toasts: Record<string, number> = {};
@@ -118,22 +167,43 @@ function run(g: Game, days: number, label: string, onDay?: (d: number) => void):
   g.speed = 30;
   const endTime = g.time + days * 1440;
   const t0 = performance.now();
-  let hourMark = Math.floor(g.time / 60);
-  let maxTraffic = 0;
+  let mark = Math.floor(g.time / 5);
+  const pk: Peaks = { cars: 0, bikes: 0, walk: 0, wait: 0, ride: 0, pax: 0 };
+  let benchMs = 0;
+  let peakHourMs = 0;
   while (g.time < endTime) {
+    const tb = performance.now();
+    if (benchAt >= 0 && g.time >= benchAt) {
+      benchAt = -1;
+      bench(g, 1, 1800, label);
+      bench(g, 10, 600, label);
+      bench(g, 30, 300, label);
+      benchMs += performance.now() - tb;
+      continue;
+    }
     g.tick(1 / 60);
-    const h = Math.floor(g.time / 60);
-    if (h !== hourMark) {
-      hourMark = h;
-      maxTraffic = Math.max(maxTraffic, g.cities[0].traffic.active);
+    const h = g.hour();
+    if (h >= 17 && h < 18) peakHourMs += performance.now() - tb;
+    const m = Math.floor(g.time / 5);
+    if (m !== mark) {
+      mark = m;
+      sample(g, pk);
     }
   }
-  const ms = performance.now() - t0;
+  const ms = performance.now() - t0 - benchMs;
   unsub();
   u2();
   u3();
   u4();
-  console.log(`  [${label}] ${(ms / (days * 24)).toFixed(1)} ms per simulated game hour; peak cars+bikes ${maxTraffic}`);
+  const c0 = g.cities[0];
+  console.log(
+    `  [${label}] ${(ms / (days * 24)).toFixed(1)} ms per simulated game hour (avg), 17-18h: ${(peakHourMs / days).toFixed(0)} ms` +
+      ` => at speed 1 ~${(ms / (days * 24) / 3600).toFixed(3)} ms/frame avg, ${(peakHourMs / days / 3600).toFixed(3)} ms/frame in the evening peak`,
+  );
+  console.log(
+    `  [${label}] PEAKS: cars ${pk.cars}, bikes ${pk.bikes} (cars+bikes ${pk.cars + pk.bikes}) | passengers ${pk.pax}: walking ${pk.walk}, waiting ${pk.wait}, riding ${pk.ride}` +
+      ` | route trees ${c0.router.trees.size} built ${c0.router.stats.built} (${c0.router.stats.ms.toFixed(0)} ms), dropped trips ${c0.droppedTrips}`,
+  );
   const top = Object.entries(toasts).sort((a, b) => b[1] - a[1]).slice(0, 6);
   if (top.length) console.log(`  [${label}] toasts: ` + top.map(([k, n]) => `${n}x "${k}"`).join('; '));
   return accidents;
@@ -168,7 +238,7 @@ const g = newGame();
 setupNetwork(g);
 console.log(`money after setup: ${eur(g.money)}`);
 const buckets = instrument(g);
-const acc1 = run(g, DAYS, 'starter', (d) => report(g, d));
+const acc1 = run(g, DAYS, 'starter', (d) => report(g, d), DAYS >= 2 ? 1440 + 16.5 * 60 : -1);
 console.log(`accidents total: ${acc1}, total delivered ${g.totalDelivered}`);
 console.log('transit share by trip distance:');
 for (const k of ['<1km', '1-2km', '2-3km', '>3km']) {

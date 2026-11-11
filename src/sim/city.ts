@@ -4,6 +4,7 @@ import { CityData } from '../osm/parse';
 import { toX, toY } from '../geo';
 import { RoadGraph, CAR_WEIGHT, CTRL_NONE, CTRL_RIGHT, CTRL_PRIORITY, CTRL_STOP, CTRL_LIGHTS, CTRL_ROUNDABOUT } from './graph';
 import { TrafficPool } from './agents';
+import { Router, RouteTree, R_CAR, R_BIKE, treeKey } from './routing';
 import { TransitNet } from './network';
 import {
   HOURLY_DEMAND, TRIPS_PER_RESIDENT, VALUE_OF_TIME, BETA, CAR_COST_KM, PARKING_CENTER, SAFE_SPEED, CLASS_RANK, PT_ASC,
@@ -54,8 +55,12 @@ export function emptyStats(): CityStats {
 }
 
 const ZONE_SIZE = 500;
-// Accident probability per (scaled) vehicle passing a junction, per control type
-const JRISK = [2.2e-4, 3.5e-5, 2.5e-5, 1.6e-5, 7e-6, 6e-6];
+// Accident probability per car agent passing a junction, per control type.
+// Agents are ~1:1 with real trips, so these are per real car (RISK_SCALE keeps a
+// handful of accidents per day in a default city of ~100k inhabitants).
+const RISK_SCALE = 0.1;
+const JRISK = [2.2e-4, 3.5e-5, 2.5e-5, 1.6e-5, 7e-6, 6e-6].map((r) => r * RISK_SCALE);
+const EDGE_RISK = 1.2e-6 * RISK_SCALE;
 const PURPOSE_MIX_AM = [0.62, 0.04, 0.28, 0.06];
 const PURPOSE_MIX_PM = [0.05, 0.52, 0.13, 0.3];
 const PURPOSE_MIX_OFF = [0.12, 0.13, 0.4, 0.35];
@@ -146,10 +151,13 @@ export class CitySim {
   ptNetVersion = -1;
   ptSkimTime = -999;
 
-  traffic = new TrafficPool(2048);
-  pathCache = new Map<number, Int32Array | null>();
-  bikeCache = new Map<number, Int32Array | null>();
-  cacheVersion = -1;
+  traffic = new TrafficPool(4096);
+  router: Router;
+  /** trips waiting for a route tree: tree key -> flat list of origin junctions */
+  private pending = new Map<number, number[]>();
+  private pendingCount = 0;
+  /** trips that could not get a road agent (no route / pending overflow) */
+  droppedTrips = 0;
 
   accidents: Accident[] = [];
   jCount!: Float32Array;
@@ -170,8 +178,22 @@ export class CitySim {
     const railWays = splitRails(data);
     this.R = railWays.length ? RoadGraph.build(data.nodes, railWays, [], true) : null;
     this.jCount = new Float32Array(this.G.nJ);
+    this.router = new Router(this.G);
+    this.router.onBuilt = (t) => this.flushPending(t);
     this.computeCore();
     this.buildZones();
+  }
+
+  /** build some route trees synchronously so that the first frames have routes (time-limited) */
+  warmRoutes(ms: number, now: number): void {
+    const t0 = performance.now();
+    for (let pass = 0; pass < 2; pass++)
+      for (const z of this.zones) {
+        if (performance.now() - t0 > ms) return;
+        const a = z.anchors[0];
+        if (a === undefined) continue;
+        if (!this.router.has(a, pass === 0 ? R_BIKE : R_CAR)) this.router.buildNow(a, pass === 0 ? R_BIKE : R_CAR, now);
+      }
   }
 
   contains(x: number, y: number, pad = 1.0): boolean {
@@ -418,31 +440,67 @@ export class CitySim {
     }
   }
 
+  /** call after road edits: route trees refresh themselves (version check), the core may change */
   ensureCaches(): void {
-    if (this.cacheVersion !== this.G.version) {
-      this.pathCache.clear();
-      this.bikeCache.clear();
-      this.cacheVersion = this.G.version;
-    }
     if (this.coreVersion !== this.G.version) this.computeCore();
   }
 
-  getPath(oj: number, dj: number, bike: boolean, now: number, budget: { n: number }): Int32Array | null | undefined {
-    const cache = bike ? this.bikeCache : this.pathCache;
-    const k = oj * 1048576 + dj;
-    if (cache.has(k)) return cache.get(k);
-    if (budget.n <= 0) return undefined;
-    budget.n--;
-    const p = this.G.findPath(oj, dj, bike ? 'tram' : 'car', now, 60000);
-    if (cache.size > 30000) cache.clear();
-    cache.set(k, p);
-    return p;
+  private flushPending(t: RouteTree): void {
+    const list = this.pending.get(t.key);
+    if (!list) return;
+    this.pending.delete(t.key);
+    this.pendingCount -= list.length;
+    const bike = t.mode === R_BIKE;
+    for (let i = 0; i < list.length; i++) {
+      const p = this.router.path(list[i], t);
+      if (p && p.length) this.spawnTraffic(p, bike);
+      else this.droppedTrips++;
+    }
+  }
+
+  /** spawn a car / bike from junction oj to (an anchor of) zone d */
+  private routeTrip(o: number, d: number, oj: number, dj: number, bike: boolean, now: number): void {
+    const mode = bike ? R_BIKE : R_CAR;
+    const R = this.router;
+    let t = R.get(dj, mode, now);
+    if (!t) {
+      R.request(dj, mode);
+      // fall back to a ready tree of another anchor in the same destination zone
+      const an = this.zones[d].anchors;
+      for (let i = 0; i < an.length && !t; i++) if (an[i] !== dj) t = R.get(an[i], mode, now);
+    }
+    if (!t) {
+      if (this.pendingCount >= 20000) {
+        this.droppedTrips++;
+        return;
+      }
+      const k = treeKey(dj, mode);
+      let list = this.pending.get(k);
+      if (!list) this.pending.set(k, (list = []));
+      list.push(oj);
+      this.pendingCount++;
+      return;
+    }
+    if (oj === t.dest) return;
+    const p = R.path(oj, t);
+    if (!p || !p.length) {
+      this.droppedTrips++;
+      return;
+    }
+    this.spawnTraffic(p, bike);
+    if (!bike) {
+      const c = t.cost[oj];
+      if (c < 65534) {
+        const k = o * this.Z + d;
+        this.carSkim[k] = this.carSkim[k] * 0.8 + (c / 60 + 1.5) * 0.2;
+      }
+    }
   }
 
   // ---------------- per-tick simulation ----------------
 
   /** demand: returns list of transit trip requests; spawns cars/bikes itself */
-  generateTrips(now: number, dtMin: number, budget: { n: number }, maxTraffic: number, onTransit: (o: number, d: number, ox: number, oy: number, dx: number, dy: number) => boolean): void {
+  generateTrips(now: number, dtMin: number, maxTraffic: number, onTransit: (o: number, d: number, ox: number, oy: number, dx: number, dy: number) => boolean): void {
     if (this.Z < 2) return;
     const hour = Math.floor((now / 60) % 24);
     const daily = this.def.population * TRIPS_PER_RESIDENT;
@@ -451,7 +509,7 @@ export class CitySim {
     const Z = this.Z;
     const G = this.G;
     let guard = 0;
-    while (this.tripAcc >= 1 && guard++ < 2000) {
+    while (this.tripAcc >= 1 && guard++ < 20000) {
       this.tripAcc -= 1;
       const r = Math.random();
       const purpose = r < mix[0] ? 0 : r < mix[0] + mix[1] ? 1 : r < mix[0] + mix[1] + mix[2] ? 2 : 3;
@@ -475,17 +533,7 @@ export class CitySim {
         const bike = mode === 1;
         if (bike) this.stats.bike++;
         else this.stats.car++;
-        if (this.traffic.active < maxTraffic && oj !== dj) {
-          const p = this.getPath(oj, dj, bike, now, budget);
-          if (p && p.length) {
-            this.spawnTraffic(p, bike);
-            if (!bike) {
-              const t = G.pathTime(p, 'car', now) / 60 + 1.5;
-              const k = o * Z + d;
-              this.carSkim[k] = this.carSkim[k] * 0.7 + t * 0.3;
-            }
-          }
-        }
+        if (this.traffic.active < maxTraffic && oj !== dj) this.routeTrip(o, d, oj, dj, bike, now);
       } else {
         this.stats.pt++;
         this.hourly[hour]++;
@@ -541,46 +589,71 @@ export class CitySim {
 
   private tmp = new Float64Array(3);
 
-  tickTraffic(dt: number, now: number, onAccident: (a: Accident) => void): void {
+  /** advance cars & bikes by dt seconds; positions (x/y/h) are refreshed when `positions` is true */
+  tickTraffic(dt: number, now: number, onAccident: (a: Accident) => void, positions = true): void {
     const T = this.traffic,
       G = this.G;
-    const tmp = this.tmp;
-    for (let i = 0; i < T.count; i++) {
-      if (!T.alive[i]) continue;
-      const path = T.paths[i]!;
-      const bike = T.mode[i] === 1;
-      let arc = path[T.arcIdx[i]];
-      if (T.wait[i] > 0) {
-        T.wait[i] -= dt;
+    const alive = T.alive,
+      modeA = T.mode,
+      paths = T.paths,
+      arcIdx = T.arcIdx,
+      sA = T.s,
+      wait = T.wait,
+      hint = T.hint;
+    const eLen = G.eLen,
+      arcLoad = G.arcLoad,
+      arcBlock = G.arcBlock,
+      jDeg = G.jDeg,
+      jCount = this.jCount;
+    for (let i = 0, n = T.count; i < n; i++) {
+      if (!alive[i]) continue;
+      let w = wait[i];
+      if (w > 0) {
+        w -= dt;
+        wait[i] = w;
+        if (w > 0) continue;
+      }
+      const path = paths[i]!;
+      const bike = modeA[i] === 1;
+      let ai = arcIdx[i];
+      let arc = path[ai];
+      const v = bike ? (arcBlock[arc] > now ? 2 : 4.4) : G.arcSpeed(arc, 'car', now);
+      // time left over after a junction wait counts as driving time
+      let s = sA[i] + v * (w < 0 ? Math.min(dt, -w) : dt);
+      let len = eLen[arc >> 1];
+      if (s < len) {
+        sA[i] = s;
         continue;
       }
-      const v = bike ? (G.arcBlock[arc] > now ? 2 : 4.4) : G.arcSpeed(arc, 'car', now);
-      let s = T.s[i] + v * dt;
-      let len = G.eLen[arc >> 1];
       let finished = false;
       while (s >= len) {
         s -= len;
-        if (!bike) G.arcLoad[arc]--;
+        if (!bike) arcLoad[arc]--;
         const j = G.arcTo(arc);
-        this.jCount[j] += bike ? 0.15 : 1;
-        if (++T.arcIdx[i] >= path.length) {
+        if (++ai >= path.length) {
+          jCount[j] += bike ? 0.15 : 1;
           finished = true;
           break;
         }
-        const next = path[T.arcIdx[i]];
+        const next = path[ai];
+        const deg = jDeg[j];
         if (!bike) {
-          G.arcLoad[next]++;
-          if (G.jDeg[j] >= 3) {
-            T.wait[i] = G.junctionDelay(arc) * (0.3 + Math.random() * 1.4);
+          jCount[j] += 1;
+          arcLoad[next]++;
+          if (deg >= 3) {
+            wait[i] = G.junctionDelay(arc) * (0.3 + Math.random() * 1.4);
             this.checkJunctionAccident(j, arc, now, onAccident);
           }
           this.checkEdgeAccident(next, now, onAccident);
-        } else if (G.jDeg[j] >= 3) T.wait[i] = Math.random() * 4;
+        } else {
+          jCount[j] += 0.15;
+          if (deg >= 3) wait[i] = Math.random() * 4;
+        }
         arc = next;
-        len = G.eLen[arc >> 1];
-        T.hint[i] = -1;
-        if (T.wait[i] > 0) {
-          s = Math.min(s, 0.5);
+        len = eLen[arc >> 1];
+        hint[i] = -1;
+        if (wait[i] > 0) {
+          if (s > 0.5) s = 0.5;
           break;
         }
       }
@@ -588,23 +661,48 @@ export class CitySim {
         T.release(i);
         continue;
       }
-      T.s[i] = s;
-      T.hint[i] = G.pointOnArc(arc, s, tmp, T.hint[i]);
-      const off = bike ? 3.6 : 1.7;
+      arcIdx[i] = ai;
+      sA[i] = s;
+    }
+    if (positions) this.updateTrafficPositions();
+  }
+
+  /** recompute x/y/heading of all cars and bikes (once per rendered frame is enough) */
+  updateTrafficPositions(): void {
+    const T = this.traffic,
+      G = this.G;
+    const tmp = this.tmp;
+    const alive = T.alive,
+      paths = T.paths,
+      arcIdx = T.arcIdx,
+      sA = T.s,
+      hint = T.hint,
+      X = T.x,
+      Y = T.y,
+      H = T.h,
+      modeA = T.mode;
+    for (let i = 0, n = T.count; i < n; i++) {
+      if (!alive[i]) continue;
+      const arc = paths[i]![arcIdx[i]];
+      hint[i] = G.pointOnArc(arc, sA[i], tmp, hint[i]);
+      const off = modeA[i] === 1 ? 3.6 : 1.7;
       const h = tmp[2];
-      T.x[i] = tmp[0] + Math.sin(h) * off;
-      T.y[i] = tmp[1] - Math.cos(h) * off;
-      T.h[i] = h;
+      X[i] = tmp[0] + Math.sin(h) * off;
+      Y[i] = tmp[1] - Math.cos(h) * off;
+      H[i] = h;
     }
   }
 
   /** once per game minute */
   minuteUpdate(now: number): void {
     const G = this.G;
-    for (let j = 0; j < G.nJ; j++) {
-      G.jLoad[j] = G.jLoad[j] * 0.85 + this.jCount[j] * CAR_WEIGHT * 0.15;
-      this.jCount[j] = 0;
+    const jLoad = G.jLoad,
+      jCount = this.jCount;
+    for (let j = 0, n = G.nJ; j < n; j++) {
+      jLoad[j] = jLoad[j] * 0.85 + jCount[j] * CAR_WEIGHT * 0.15;
+      jCount[j] = 0;
     }
+    this.traffic.trim();
     if (this.accidents.length) this.accidents = this.accidents.filter((a) => a.until > now);
   }
 
@@ -638,7 +736,7 @@ export class CitySim {
     const limit = G.eSpeed[e],
       safe = Math.max(SAFE_SPEED[G.eCls[e]] ?? 50, G.eSpeedOsm[e]);
     if (limit <= safe) return;
-    const p = 1.2e-6 * (G.eLen[e] / 100) * Math.exp((limit - safe) / 9) * (1 + G.arcLoad[arc] * 0.05);
+    const p = EDGE_RISK * (G.eLen[e] / 100) * Math.exp((limit - safe) / 9) * (1 + G.arcLoad[arc] * CAR_WEIGHT * 0.008);
     if (Math.random() < p) {
       const k = (G.ePt[e] + G.ePt[e + 1]) >> 1;
       this.addAccident(G.px[k], G.py[k], now, `te hoge maximumsnelheid (${limit} km/u)`, -1, e, onAccident);

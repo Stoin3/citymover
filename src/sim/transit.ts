@@ -1,6 +1,7 @@
 // Public transport: stops, lines, route geometry and vehicles.
 import { MODES, ModeDef, ModeId, TIME_BLOCKS } from '../config';
 import { RoadGraph, RouteKind } from './graph';
+import { PaxQueue } from './agents';
 
 export interface StopData {
   id: number;
@@ -49,7 +50,7 @@ export class LineDir {
   arcG: (RoadGraph | null)[] = [];
   stopDist = new Float64Array(0);
   segTime = new Float64Array(0); // expected seconds stop k -> k+1 (incl. dwell at k)
-  waiting: number[][] = [];
+  waiting: PaxQueue[] = [];
   nextDispatch = 0;
   length = 0;
 }
@@ -280,7 +281,7 @@ export function buildLineRoute(line: Line, stops: Stop[], ctx: RouteContext): vo
     }
     dir.segTime = seg;
     // waiting lists: keep for same stop sequence else reset
-    if (dir.waiting.length !== ordered.length) dir.waiting = ordered.map(() => []);
+    if (dir.waiting.length !== ordered.length) dir.waiting = ordered.map(() => new PaxQueue());
   }
   line.valid = true;
 }
