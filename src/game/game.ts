@@ -3,7 +3,7 @@
 import {
   MODES, MODE_LIST, FEATURES, START_MONEY, MAX_WAIT_MIN, ROAD_EDIT_COST, CONTROL_FEATURE, CONTROL_COST,
   ACCIDENT_CLAIM, BUS_ACCIDENT_REPAIR, SUBSIDY_PER_1000, SUBSIDY_PER_PAX, SUBSIDY_FULL_PAX_PER_1000, VEHICLE_RESALE,
-  blockAt, levelFromXp, maxCities, cityUnlockCost, type ModeId,
+  blockAt, levelFromXp, levelBonus, maxCities, cityUnlockCost, type ModeId,
 } from '../config';
 import { CITY_BY_ID, neighbours, type CityDef } from '../data/cities';
 import type { CityData } from '../osm/parse';
@@ -102,6 +102,7 @@ export class Game implements IGame {
   frameMs = 0;
   /** smoothed cost of one simulation sub-step (ms) */
   private stepMs = 0;
+  private posMs = 0;
   nextId = 1;
   intercity: Intercity;
 
@@ -928,12 +929,14 @@ export class Game implements IGame {
       const ts = performance.now();
       // never freeze the browser: drop the rest of this frame's game time when the
       // next sub-step would not fit in the frame budget (always do at least one)
-      if (i > 0 && ts - t0 + this.stepMs > FRAME_BUDGET_MS) break;
+      if (i > 0 && ts - t0 + this.stepMs + this.posMs > FRAME_BUDGET_MS) break;
       this.step(dt);
       done++;
       this.stepMs = this.stepMs * 0.8 + (performance.now() - ts) * 0.2;
     }
+    const tp = performance.now();
     for (const c of this.cities) c.updateTrafficPositions();
+    this.posMs = this.posMs * 0.8 + (performance.now() - tp) * 0.2;
     const ach = (this.speed * done) / n;
     this.effectiveSpeed = this.effectiveSpeed * 0.9 + ach * 0.1;
     this.frameMs = performance.now() - t0;
@@ -1007,6 +1010,11 @@ export class Game implements IGame {
       for (const m of MODE_LIST) if (m.unlockLevel === l) unlocked.push(m.name);
       for (const f of FEATURES) if (f.level === l) unlocked.push(f.name);
       if (maxCities(l) > maxCities(l - 1)) unlocked.push('Nieuwe stad beschikbaar');
+      // Investment grant from the province for reaching a new level
+      const bonus = levelBonus(l);
+      this.money += bonus;
+      this.ledgerToday.subsidy += bonus;
+      unlocked.push(`Investeringssubsidie ${eur(bonus)}`);
     }
     this.lastLevel = L;
     this.emit('levelup', { level: L, unlocked });

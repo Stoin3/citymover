@@ -130,6 +130,11 @@ export function cityUnlockCost(population: number): number {
 
 export const START_MONEY = 1_500_000;
 
+/** One-off investment grant when reaching a level (keeps tram/metro reachable). */
+export function levelBonus(level: number): number {
+  return 300_000 * (level - 1);
+}
+
 // Simulation scale: number of simulated trips per resident per day. Every trip is an
 // individual citizen (walkers are only counted); the Dutch average is ~2.7 trips per
 // resident per day incl. walking, slightly less within the playable city area.
