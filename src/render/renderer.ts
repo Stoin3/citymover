@@ -397,7 +397,7 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
     const style = map.getStyle();
     const layers = style.layers || [];
     let bIdx = layers.findIndex((l: { type: string }) => l.type === 'fill-extrusion');
-    if (bIdx < 0) {
+    if (bIdx < 0 && map.getSource('openmaptiles')) {
       // style without 3D buildings: add our own extrusion layer before the first symbol layer
       const firstSymbol = layers.find((l: { type: string }) => l.type === 'symbol')?.id;
       map.addLayer(
@@ -416,7 +416,7 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
         },
         firstSymbol,
       );
-    } else {
+    } else if (bIdx >= 0) {
       const id = layers[bIdx].id;
       try {
         map.setLayerZoomRange(id, 13, 24);
@@ -1398,6 +1398,21 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
       }
     }),
   );
+
+  // if the tile style cannot be fetched (offline / blocked), fall back to a plain background so
+  // the game (deck.gl layers) still works
+  let styleOk = false;
+  map.once('styledata', () => (styleOk = true));
+  map.on('error', (ev) => {
+    if (styleOk || ready || destroyed) return;
+    styleOk = true;
+    console.warn('[renderer] kaartstijl niet geladen, terugval op lege kaart', ev.error);
+    map.setStyle({
+      version: 8,
+      sources: {},
+      layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#dfe3e8' } }],
+    });
+  });
 
   map.on('load', () => {
     if (destroyed) return;
