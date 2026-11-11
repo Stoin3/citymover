@@ -421,6 +421,8 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
       try {
         map.setLayerZoomRange(id, 13, 24);
         map.setPaintProperty(id, 'fill-extrusion-opacity', 0.92);
+        map.setPaintProperty(id, 'fill-extrusion-height', ['coalesce', ['get', 'render_height'], 0]);
+        map.setPaintProperty(id, 'fill-extrusion-base', ['coalesce', ['get', 'render_min_height'], 0]);
         map.setPaintProperty(id, 'fill-extrusion-color', [
           'interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 0],
           0, 'hsl(35,10%,86%)', 30, 'hsl(30,8%,80%)', 80, 'hsl(215,12%,76%)',
@@ -1418,7 +1420,7 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
     if (destroyed) return;
     setupStyle();
     overlay = new MapboxOverlay({ interleaved: true, layers: [] });
-    if (!location.search.includes('nodeck')) map.addControl(overlay as unknown as maplibregl.IControl);
+    map.addControl(overlay as unknown as maplibregl.IControl);
     updateBounds();
     ready = true;
     staticDirty = true;
