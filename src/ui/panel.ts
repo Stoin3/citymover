@@ -27,7 +27,7 @@ export abstract class Panel {
     this.el = h('section', { class: 'cm-panel cm-glass' }, h('header', { class: 'cm-panel-head' }, this.titleEl, closeBtn), this.body);
     this.el.addEventListener('focusout', () => {
       setTimeout(() => {
-        if (this.dirty && !this.hasFocusedInput()) this.rebuild();
+        if (this.dirty && this.el.isConnected && this.isValid() && !this.hasFocusedInput()) this.rebuild();
       }, 0);
     });
   }

@@ -4,7 +4,7 @@ import { MODES, MODE_LIST, ModeId, TIME_BLOCKS, blockAt } from '../config';
 import type { Line, Stop } from '../sim/transit';
 import type { GameUI } from './gameUI';
 import { Panel, section, kv, hint } from './panel';
-import { h, eur, eurCents, int, km, pct, rgb, rgbToHex, hexToRgb, modeChip, colorDot, dec1 } from './dom';
+import { h, eur, eurCents, int, km, pct, rgb, rgbToHex, hexToRgb, modeChip, colorDot, dec1, lineLabel } from './dom';
 import { toast, confirmDialog } from './overlays';
 
 const BUILD_HINT: Record<ModeId, string> = {
@@ -45,7 +45,7 @@ export class LineBuilderPanel extends Panel {
   title(): Node {
     const m = MODES[this.mode];
     const line = this.editLineId !== null ? this.game.lines.get(this.editLineId) : undefined;
-    return h('span', { class: 'cm-title-row' }, h('span', { class: 'cm-title-ico', style: `background:${rgb(m.color)}` }, m.icon), line ? `${line.d.name} bewerken` : `Nieuwe ${m.name.toLowerCase()}lijn`);
+    return h('span', { class: 'cm-title-row' }, h('span', { class: 'cm-title-ico', style: `background:${rgb(m.color)}` }, m.icon), line ? `${lineLabel(line.d)} bewerken` : `Nieuwe ${m.name.toLowerCase()}lijn`);
   }
 
   onOpen(): void {
@@ -200,7 +200,7 @@ export class LineBuilderPanel extends Panel {
       }
       lineId = l.d.id;
       const line = g.lines.get(lineId);
-      toast(`${line?.d.name ?? 'Lijn'} aangelegd! Koop nu voertuigen om de lijn te laten rijden.`, 'good');
+      toast(`${line ? lineLabel(line.d) : 'Lijn'} aangelegd! Koop nu voertuigen om de lijn te laten rijden.`, 'good');
     }
     this.committed = true;
     this.cleanupStops(new Set(this.stops));
@@ -228,7 +228,7 @@ export class LinePanel extends Panel {
   }
   title(): Node {
     const l = this.line!;
-    return h('span', { class: 'cm-title-row' }, h('span', { class: 'cm-title-ico', style: `background:${rgb(l.d.color)}` }, l.def.icon), l.d.name);
+    return h('span', { class: 'cm-title-row' }, h('span', { class: 'cm-title-ico', style: `background:${rgb(l.d.color)}` }, l.def.icon), lineLabel(l.d));
   }
 
   build(body: HTMLElement): void {
@@ -450,11 +450,11 @@ export class LinePanel extends Panel {
           {
             class: 'cm-btn cm-btn-danger cm-btn-small',
             onclick: async () => {
-              const ok = await confirmDialog(`${d.name} verwijderen?`, 'De lijn wordt opgeheven. Voertuigen worden verkocht; haltes blijven staan.', 'Verwijderen', true);
+              const ok = await confirmDialog(`${lineLabel(d)} verwijderen?`, 'De lijn wordt opgeheven. Voertuigen worden verkocht; haltes blijven staan.', 'Verwijderen', true);
               if (ok) {
                 g.deleteLine(d.id);
                 this.ui.closePanel(this);
-                toast(`${d.name} is opgeheven.`, 'info');
+                toast(`${lineLabel(d)} is opgeheven.`, 'info');
               }
             },
           },
@@ -500,7 +500,7 @@ export class LinesListPanel extends Panel {
     }, 'cm-muted cm-small', 'div');
     body.append(totals);
     for (const m of MODE_LIST) {
-      const ls = lines.filter((l) => l.d.mode === m.id).sort((a, b) => a.d.name.localeCompare(b.d.name, 'nl', { numeric: true }));
+      const ls = lines.filter((l) => l.d.mode === m.id).sort((a, b) => lineLabel(a.d).localeCompare(lineLabel(b.d), 'nl', { numeric: true }));
       if (!ls.length) continue;
       const list = h('div', { class: 'cm-linelist' });
       for (const l of ls) {
@@ -510,9 +510,9 @@ export class LinesListPanel extends Panel {
         list.append(
           h(
             'button',
-            { class: 'cm-ll-row', title: `Open ${l.d.name}`, onclick: () => this.ui.openLine(l.d.id) },
+            { class: 'cm-ll-row', title: `Open ${lineLabel(l.d)}`, onclick: () => this.ui.openLine(l.d.id) },
             colorDot(l.d.color),
-            h('span', { class: 'cm-ll-name' }, l.d.name),
+            h('span', { class: 'cm-ll-name' }, lineLabel(l.d)),
             warn,
             this.text(() => `${int(l.paxToday)} 🧍`, 'cm-ll-pax'),
             profit,
@@ -575,7 +575,7 @@ export class StopPanel extends Panel {
     const lines = lineStopsUsed(this.ui, s.d.id);
     const list = h('div', { class: 'cm-linelist' });
     for (const l of lines)
-      list.append(h('button', { class: 'cm-ll-row', onclick: () => this.ui.openLine(l.d.id) }, colorDot(l.d.color), h('span', { class: 'cm-ll-name' }, l.d.name), this.text(() => `${int(l.paxToday)} 🧍`, 'cm-ll-pax')));
+      list.append(h('button', { class: 'cm-ll-row', onclick: () => this.ui.openLine(l.d.id) }, colorDot(l.d.color), h('span', { class: 'cm-ll-name' }, lineLabel(l.d)), this.text(() => `${int(l.paxToday)} 🧍`, 'cm-ll-pax')));
     body.append(section(`Lijnen via deze halte (${lines.length})`, lines.length ? list : h('div', { class: 'cm-empty' }, 'Nog geen lijn stopt hier.')));
     body.append(
       h(

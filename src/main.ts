@@ -32,7 +32,11 @@ function runLoop(s: Session): void {
 }
 
 startApp(uiRoot, mapEl, { createGame, createRenderer, saveBackend })
-  .then(runLoop)
+  .then((s) => {
+    // handy for debugging from the browser console
+    (window as unknown as { cityMover: Session }).cityMover = s;
+    runLoop(s);
+  })
   .catch((e) => {
     console.error(e);
     uiRoot.textContent = 'CityMover kon niet starten: ' + (e instanceof Error ? e.message : String(e));

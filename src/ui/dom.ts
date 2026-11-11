@@ -109,3 +109,8 @@ export function isTyping(): boolean {
   const t = a.tagName;
   return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || a.isContentEditable;
 }
+
+/** Display name for a line: bare numbers ("1") get the mode name ("Bus 1"). */
+export function lineLabel(d: { name: string; mode: ModeId }): string {
+  return /^\d+[a-z]?$/i.test(d.name.trim()) ? `${MODES[d.mode].name} ${d.name.trim()}` : d.name;
+}

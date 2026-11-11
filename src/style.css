@@ -1,7 +1,7 @@
 /* CityMover UI — dark glassmorphism over the map. All UI classes are prefixed cm- (renderer uses cm-r-). */
 :root {
-  --cm-bg: rgba(13, 17, 30, 0.74);
-  --cm-bg-strong: rgba(13, 17, 30, 0.9);
+  --cm-bg: rgba(14, 18, 32, 0.88);
+  --cm-bg-strong: rgba(14, 18, 32, 0.94);
   --cm-bg-solid: #0d111e;
   --cm-surface: rgba(255, 255, 255, 0.045);
   --cm-surface-2: rgba(255, 255, 255, 0.08);

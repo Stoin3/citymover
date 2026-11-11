@@ -4,7 +4,7 @@ import { HOURLY_DEMAND, TIME_BLOCKS } from '../config';
 import type { GameUI } from './gameUI';
 import { Panel, section, kv } from './panel';
 import { modalSplit } from './regionPanel';
-import { h, eur, int, clear } from './dom';
+import { h, eur, int, clear, lineLabel } from './dom';
 
 export function ledgerResult(l: Ledger): number {
   return l.fares + l.subsidy - l.operations - l.construction - l.vehicles - l.accidents;
@@ -65,8 +65,8 @@ export class FinancePanel extends Panel {
         tbody.append(
           h(
             'tr',
-            { class: 'cm-clickable', onclick: () => this.ui.openLine(l.d.id), title: `Open ${l.d.name}` },
-            h('th', null, h('span', { class: 'cm-dot', style: `background:rgb(${l.d.color})` }), ' ', l.d.name),
+            { class: 'cm-clickable', onclick: () => this.ui.openLine(l.d.id), title: `Open ${lineLabel(l.d)}` },
+            h('th', null, h('span', { class: 'cm-dot', style: `background:rgb(${l.d.color})` }), ' ', lineLabel(l.d)),
             h('td', null, eur(l.revenueToday)),
             h('td', null, eur(l.costToday)),
             h('td', { class: p < 0 ? 'cm-neg' : 'cm-pos' }, eur(p)),
