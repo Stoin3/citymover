@@ -528,16 +528,19 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
   const markers = new Map<string, { m: maplibregl.Marker; el: HTMLDivElement; state: string }>();
   function createMarkers(): void {
     for (const def of CITIES) {
+      // outer element belongs to MapLibre (it adds its own classes); we style the inner pill
+      const outer = document.createElement('div');
       const el = document.createElement('div');
       el.className = 'cm-r-marker cm-r-locked';
-      el.addEventListener('click', (ev) => {
+      outer.appendChild(el);
+      outer.addEventListener('click', (ev) => {
         ev.stopPropagation();
         markerClickAt = performance.now();
         const lon = def.lon,
           lat = def.lat;
         emitClick({ x: toX(lon), y: toY(lat), lon, lat, pick: { kind: 'city', cityId: def.id } });
       });
-      const m = new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -4] }).setLngLat([def.lon, def.lat]).addTo(map);
+      const m = new maplibregl.Marker({ element: outer, anchor: 'bottom', offset: [0, -4] }).setLngLat([def.lon, def.lat]).addTo(map);
       markers.set(def.id, { m, el, state: '' });
     }
     updateMarkers();
@@ -760,7 +763,7 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
       return ramp(GREEN_RED, t, out, 230);
     }
     const roadsMode = mode === 'roads';
-    const alpha = roadsMode ? 225 : 26;
+    const alpha = roadsMode ? 230 : 40;
     if (G.eBus[e]) {
       out[0] = 230; out[1] = 50; out[2] = 60; out[3] = roadsMode ? 240 : 90;
       return out;
@@ -770,10 +773,11 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
       return out;
     }
     const cls = G.eCls[e];
-    if (cls <= 1 || cls === 8 || cls === 9) { out[0] = 255; out[1] = 140; out[2] = 60; }
-    else if (cls <= 3 || cls === 10 || cls === 11) { out[0] = 255; out[1] = 205; out[2] = 80; }
-    else if (cls === 4 || cls === 12) { out[0] = 245; out[1] = 240; out[2] = 170; }
-    else { out[0] = 225; out[1] = 232; out[2] = 245; }
+    if (cls <= 1 || cls === 8 || cls === 9) { out[0] = 255; out[1] = 110; out[2] = 40; }
+    else if (cls <= 3 || cls === 10 || cls === 11) { out[0] = 255; out[1] = 185; out[2] = 30; }
+    else if (cls === 4 || cls === 12) { out[0] = 175; out[1] = 215; out[2] = 70; }
+    else if (cls === 7) { out[0] = 120; out[1] = 200; out[2] = 255; }
+    else { out[0] = 60; out[1] = 135; out[2] = 245; }
     out[3] = alpha;
     return out;
   }
@@ -883,7 +887,7 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
             stroked: true,
             getLineColor: [15, 20, 35, 230],
             lineWidthUnits: 'pixels',
-            getLineWidth: 1,
+            getLineWidth: 1.5,
             pickable: mode === 'roads',
             autoHighlight: mode === 'roads',
             highlightColor: [0, 230, 255, 255],
@@ -1473,6 +1477,7 @@ export function createRenderer(container: HTMLElement, game: IGame): IRenderer {
     },
   };
   // expose for debugging / tests
-  (renderer as unknown as { map: maplibregl.Map }).map = map;
+  Object.defineProperty(renderer, 'map', { value: map });
+  Object.defineProperty(renderer, 'overlay', { get: () => overlay });
   return renderer;
 }

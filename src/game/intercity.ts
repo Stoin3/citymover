@@ -22,7 +22,12 @@ export interface IntercityHost {
 export const MAX_HIGHWAY_CARS = 4000;
 export const HIGHWAY_SPEED_COST = 5_000;
 export const HIGHWAY_LANE_COST = 6_000_000;
-const TRIP_FACTOR = 6e-6;
+// daily trips between two cities = TRIP_FACTOR * popA * popB / max(15, km)^2 (agents ~1:1 with real trips)
+const TRIP_FACTOR = 6e-5;
+/** real vehicles per simulated highway car (through & freight traffic) */
+const HIGHWAY_WEIGHT = 1.5;
+/** accident probability per car trip at 100 km/h without congestion */
+const HIGHWAY_RISK = 1.5e-6;
 
 class HCar implements HighwayCar {
   link: HighwayLink;
@@ -33,11 +38,15 @@ class HCar implements HighwayCar {
   y = 0;
   h = 0;
   k = 0; // segment hint
-  constructor(link: HighwayLink, s: number, dir: 1 | -1, speed: number) {
+  cum: Float64Array;
+  L: number;
+  constructor(link: HighwayLink, s: number, dir: 1 | -1, speed: number, cum: Float64Array) {
     this.link = link;
     this.s = s;
     this.dir = dir;
     this.speed = speed;
+    this.cum = cum;
+    this.L = cum.length ? cum[cum.length - 1] : 0;
   }
 }
 
@@ -161,8 +170,8 @@ export class Intercity {
   }
 
   /** position along polyline; writes x,y,heading into out; returns segment index */
-  pointAt(link: HighwayLink, s: number, hint: number, out: Float64Array): number {
-    const cum = this.cum.get(link)!;
+  pointAt(link: HighwayLink, s: number, hint: number, out: Float64Array, cumIn?: Float64Array): number {
+    const cum = cumIn ?? this.cum.get(link)!;
     const p = link.pts;
     const n = cum.length;
     let k = Math.max(0, Math.min(hint, n - 2));
@@ -244,7 +253,7 @@ export class Intercity {
       const cnt = this.minuteCount.get(link) || 0;
       this.minuteCount.set(link, 0);
       link.carsPerHour = link.carsPerHour * 0.9 + cnt * 60 * 0.1;
-      link.congestion = Math.min(1, (link.carsPerHour * 6) / (link.settings.lanes * 1800));
+      link.congestion = Math.min(1, (link.carsPerHour * HIGHWAY_WEIGHT) / (link.settings.lanes * 1800));
     }
     for (const c of this.cars) c.speed = this.carSpeed(c.link, now);
     if (this.accidents.length) this.accidents = this.accidents.filter((a) => a.until > now);
@@ -260,7 +269,7 @@ export class Intercity {
         const daily = (TRIP_FACTOR * A.def.population * B.def.population) / Math.max(15, dKm) ** 2;
         let acc = (this.acc.get(key) || 0) + daily * hf;
         let guard = 0;
-        while (acc >= 1 && guard++ < 200) {
+        while (acc >= 1 && guard++ < 2000) {
           acc -= 1;
           if (Math.random() < 0.5) this.trip(i, j, dKm, now);
           else this.trip(j, i, dKm, now);
@@ -301,12 +310,12 @@ export class Intercity {
     const L = this.linkLength(link);
     const forward = link.a === A.def.id;
     if (this.cars.length < MAX_HIGHWAY_CARS && L > 0) {
-      const c = new HCar(link, forward ? 0 : L, forward ? 1 : -1, this.carSpeed(link, now));
+      const c = new HCar(link, forward ? 0 : L, forward ? 1 : -1, this.carSpeed(link, now), this.cum.get(link)!);
       c.k = forward ? 0 : link.pts.length / 2 - 2;
       this.cars.push(c);
     }
     // accident risk
-    const p = 1.5e-5 * (speed / 100) ** 4 * (1 + 2 * cong);
+    const p = HIGHWAY_RISK * (speed / 100) ** 4 * (1 + 2 * cong);
     if (Math.random() < p && link.closedUntil <= now && L > 0) {
       const out = this.tmp;
       this.pointAt(link, Math.random() * L, 0, out);
@@ -336,10 +345,9 @@ export class Intercity {
     let w = 0;
     for (let i = 0; i < cars.length; i++) {
       const c = cars[i];
-      const L = this.linkLength(c.link);
       c.s += c.dir * c.speed * dt;
-      if (c.s < 0 || c.s > L) continue; // arrived
-      c.k = this.pointAt(c.link, c.s, c.k, out);
+      if (c.s < 0 || c.s > c.L) continue; // arrived
+      c.k = this.pointAt(c.link, c.s, c.k, out, c.cum);
       const h = c.dir === 1 ? out[2] : out[2] + Math.PI;
       c.h = h;
       c.x = out[0] + Math.sin(h) * 4;

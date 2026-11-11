@@ -2,9 +2,9 @@
 const CSS = `
 .cm-r-marker{display:flex;align-items:center;gap:5px;padding:4px 9px 4px 7px;border-radius:14px;
   font:600 12px/1.2 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;white-space:nowrap;cursor:pointer;
-  box-shadow:0 2px 8px rgba(0,0,0,.35);user-select:none;position:relative;transform-origin:50% 100%;
-  transition:transform .12s ease, opacity .2s ease}
-.cm-r-marker:hover{transform:scale(1.08)}
+  box-shadow:0 2px 8px rgba(0,0,0,.35);user-select:none;width:max-content;position:relative;
+  transition:opacity .2s ease, filter .12s ease}
+.cm-r-marker:hover{filter:brightness(1.08);z-index:2}
 .cm-r-marker::after{content:"";position:absolute;left:50%;bottom:-6px;margin-left:-6px;border:6px solid transparent;
   border-bottom:0;border-top-color:inherit}
 .cm-r-marker .cm-r-ico{font-size:12px;line-height:1}

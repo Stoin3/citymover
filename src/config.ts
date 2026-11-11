@@ -29,37 +29,37 @@ export interface ModeDef {
 export const MODES: Record<ModeId, ModeDef> = {
   bus: {
     id: 'bus', name: 'Bus', icon: '🚌', color: [230, 57, 70], unlockLevel: 1, capacity: 90, cruiseKmh: 70,
-    vehiclePrice: 120_000, opCostHour: 18, opCostKm: 0.25, stopCost: 4_000, infraPerKm: 0, dwell: 12,
+    vehiclePrice: 120_000, opCostHour: 60, opCostKm: 0.5, stopCost: 4_000, infraPerKm: 0, dwell: 12,
     routing: 'road', defaultFareBase: 1.1, defaultFareKm: 0.18, dims: [12, 2.55, 3.2], z: 0, stopRadius: 600,
     minStopSpacing: 150, intercity: false,
   },
   tram: {
     id: 'tram', name: 'Tram', icon: '🚋', color: [255, 183, 3], unlockLevel: 3, capacity: 220, cruiseKmh: 60,
-    vehiclePrice: 900_000, opCostHour: 40, opCostKm: 0.6, stopCost: 30_000, infraPerKm: 600_000, dwell: 15,
+    vehiclePrice: 200_000, opCostHour: 100, opCostKm: 1.2, stopCost: 15_000, infraPerKm: 120_000, dwell: 15,
     routing: 'tram', defaultFareBase: 1.1, defaultFareKm: 0.18, dims: [30, 2.4, 3.4], z: 0, stopRadius: 700,
     minStopSpacing: 250, intercity: false,
   },
   metro: {
     id: 'metro', name: 'Metro', icon: '🚇', color: [58, 134, 255], unlockLevel: 5, capacity: 900, cruiseKmh: 80,
-    vehiclePrice: 4_000_000, opCostHour: 120, opCostKm: 1.8, stopCost: 1_500_000, infraPerKm: 5_000_000, dwell: 20,
+    vehiclePrice: 500_000, opCostHour: 300, opCostKm: 3, stopCost: 120_000, infraPerKm: 300_000, dwell: 20,
     routing: 'straight', defaultFareBase: 1.1, defaultFareKm: 0.18, dims: [70, 2.9, 3.6], z: 0, stopRadius: 900,
     minStopSpacing: 500, intercity: false,
   },
   train: {
     id: 'train', name: 'Trein', icon: '🚆', color: [255, 214, 10], unlockLevel: 6, capacity: 700, cruiseKmh: 140,
-    vehiclePrice: 7_000_000, opCostHour: 160, opCostKm: 2.5, stopCost: 1_000_000, infraPerKm: 0, dwell: 45,
+    vehiclePrice: 2_500_000, opCostHour: 400, opCostKm: 5, stopCost: 300_000, infraPerKm: 0, dwell: 45,
     routing: 'rail', defaultFareBase: 2.6, defaultFareKm: 0.17, dims: [110, 2.9, 4.2], z: 0, stopRadius: 1200,
     minStopSpacing: 1000, intercity: true,
   },
   coach: {
     id: 'coach', name: 'Snelbus', icon: '🚍', color: [112, 224, 0], unlockLevel: 4, capacity: 65, cruiseKmh: 100,
-    vehiclePrice: 280_000, opCostHour: 26, opCostKm: 0.35, stopCost: 15_000, infraPerKm: 0, dwell: 30,
+    vehiclePrice: 280_000, opCostHour: 80, opCostKm: 0.7, stopCost: 15_000, infraPerKm: 0, dwell: 30,
     routing: 'highway', defaultFareBase: 2.5, defaultFareKm: 0.12, dims: [14, 2.55, 3.6], z: 0, stopRadius: 800,
     minStopSpacing: 1000, intercity: true,
   },
   plane: {
     id: 'plane', name: 'Vliegtuig', icon: '✈️', color: [224, 224, 255], unlockLevel: 10, capacity: 180, cruiseKmh: 750,
-    vehiclePrice: 45_000_000, opCostHour: 1800, opCostKm: 4, stopCost: 15_000_000, infraPerKm: 0, dwell: 900,
+    vehiclePrice: 45_000_000, opCostHour: 3600, opCostKm: 8, stopCost: 15_000_000, infraPerKm: 0, dwell: 900,
     routing: 'air', defaultFareBase: 45, defaultFareKm: 0.09, dims: [38, 34, 12], z: 0, stopRadius: 0,
     minStopSpacing: 50_000, intercity: true,
   },
@@ -108,7 +108,9 @@ export const FEATURES: FeatureDef[] = [
 
 export function xpForLevel(level: number): number {
   if (level <= 1) return 0;
-  return Math.round(1000 * Math.pow(level - 1, 1.8));
+  // 1 xp per delivered local passenger (3 per intercity traveller); a starter
+  // bus network in a 100k city delivers ~20k passengers per game day.
+  return Math.round(10_000 * Math.pow(level - 1, 1.8));
 }
 
 export function levelFromXp(xp: number): number {
@@ -128,8 +130,10 @@ export function cityUnlockCost(population: number): number {
 
 export const START_MONEY = 1_500_000;
 
-// Simulation scale: number of simulated trips per resident per day.
-export const TRIPS_PER_RESIDENT = 2.3;
+// Simulation scale: number of simulated trips per resident per day. Every trip is an
+// individual citizen (walkers are only counted); the Dutch average is ~2.7 trips per
+// resident per day incl. walking, slightly less within the playable city area.
+export const TRIPS_PER_RESIDENT = 2.4;
 
 // Behaviour (logit) parameters, utilities in "minutes".
 export const VALUE_OF_TIME = 0.2; // € per minute (12 €/h)
@@ -164,7 +168,7 @@ export const BUS_ACCIDENT_REPAIR = 20_000; // extra when one of your vehicles is
 // Daily municipal subsidy per city = population/1000 * SUBSIDY_PER_1000 * service * safety + delivered * SUBSIDY_PER_PAX
 //   service = min(1, delivered / (population/1000 * SUBSIDY_FULL_PAX_PER_1000))
 //   safety  = 1 - min(0.8, accidents * 0.03)
-export const SUBSIDY_PER_1000 = 600;
-export const SUBSIDY_FULL_PAX_PER_1000 = 30;
-export const SUBSIDY_PER_PAX = 0.3; // daily subsidy per delivered passenger
+export const SUBSIDY_PER_1000 = 250;
+export const SUBSIDY_FULL_PAX_PER_1000 = 300;
+export const SUBSIDY_PER_PAX = 0.4; // daily subsidy per delivered passenger
 export const VEHICLE_RESALE = 0.5; // fraction of the price refunded when selling vehicles

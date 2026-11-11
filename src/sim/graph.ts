@@ -54,6 +54,9 @@ export class RoadGraph {
   px!: Float64Array;
   py!: Float64Array;
   pc!: Float32Array; // cumulative distance at point
+  ph!: Float32Array; // heading of segment point k -> k+1 (radians)
+  pcos!: Float32Array; // cos / sin of that heading
+  psin!: Float32Array;
 
   arcLoad!: Float32Array; // vehicles currently on arc
   arcBlock!: Float64Array; // blocked until game-time (minutes)
@@ -181,6 +184,16 @@ export class RoadGraph {
       }
     });
     G.ePt[nE] = p;
+    G.ph = new Float32Array(nP);
+    G.pcos = new Float32Array(nP);
+    G.psin = new Float32Array(nP);
+    for (let e = 0; e < nE; e++)
+      for (let k = G.ePt[e], ke = G.ePt[e + 1] - 1; k < ke; k++) {
+        const h = Math.atan2(G.py[k + 1] - G.py[k], G.px[k + 1] - G.px[k]);
+        G.ph[k] = h;
+        G.pcos[k] = Math.cos(h);
+        G.psin[k] = Math.sin(h);
+      }
     const sigSet = new Set(signals);
     for (let j = 0; j < nJ; j++) {
       let c = CTRL_RIGHT;
@@ -403,6 +416,39 @@ export class RoadGraph {
     out[0] = x0 + (x1 - x0) * t;
     out[1] = y0 + (y1 - y0) * t;
     out[2] = a & 1 ? Math.atan2(y0 - y1, x0 - x1) : Math.atan2(y1 - y0, x1 - x0);
+    return k;
+  }
+
+  /**
+   * Like pointOnArc without trigonometry: writes x, y, heading, cos(heading), sin(heading)
+   * into out[0..4] (out needs length >= 5). Returns the segment index (use as next hint).
+   */
+  arcPos(a: number, s: number, out: Float64Array, hint = -1): number {
+    const e = a >> 1;
+    const p0 = this.ePt[e],
+      p1 = this.ePt[e + 1] - 1;
+    const pc = this.pc;
+    const d = a & 1 ? this.eLen[e] - s : s;
+    let k = hint >= p0 && hint < p1 ? hint : p0;
+    while (k < p1 - 1 && pc[k + 1] < d) k++;
+    while (k > p0 && pc[k] > d) k--;
+    const segLen = pc[k + 1] - pc[k] || 1;
+    let t = (d - pc[k]) / segLen;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const x0 = this.px[k],
+      y0 = this.py[k];
+    out[0] = x0 + (this.px[k + 1] - x0) * t;
+    out[1] = y0 + (this.py[k + 1] - y0) * t;
+    if (a & 1) {
+      const h = this.ph[k];
+      out[2] = h > 0 ? h - Math.PI : h + Math.PI;
+      out[3] = -this.pcos[k];
+      out[4] = -this.psin[k];
+    } else {
+      out[2] = this.ph[k];
+      out[3] = this.pcos[k];
+      out[4] = this.psin[k];
+    }
     return k;
   }
 

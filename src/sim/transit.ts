@@ -51,6 +51,8 @@ export class LineDir {
   stopDist = new Float64Array(0);
   segTime = new Float64Array(0); // expected seconds stop k -> k+1 (incl. dwell at k)
   waiting: PaxQueue[] = [];
+  /** smoothed load factor when leaving stop k ((on board + left behind) / capacity, up to 2) */
+  load = new Float32Array(0);
   nextDispatch = 0;
   length = 0;
 }
@@ -91,7 +93,9 @@ export class Line {
   costYesterday = 0;
   loadSamples = 0;
   loadSum = 0;
-  crowding = 0; // 0..1 recent load factor
+  crowding = 0; // 0..1 recent load factor (>1: passengers left behind)
+  crowdPeak = 0; // highest crowding today
+  crowdPeakYesterday = 0;
   pendingCorridor = false;
   constructor(d: LineData) {
     this.d = d;
@@ -282,6 +286,7 @@ export function buildLineRoute(line: Line, stops: Stop[], ctx: RouteContext): vo
     dir.segTime = seg;
     // waiting lists: keep for same stop sequence else reset
     if (dir.waiting.length !== ordered.length) dir.waiting = ordered.map(() => new PaxQueue());
+    if (dir.load.length !== ordered.length) dir.load = new Float32Array(ordered.length);
   }
   line.valid = true;
 }

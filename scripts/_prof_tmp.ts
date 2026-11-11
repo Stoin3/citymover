@@ -1,0 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { createGameFromData } from '../src/game/game.ts';
+import type { CityData } from '../src/osm/parse.ts';
+const data = JSON.parse(readFileSync(new URL('../public/data/delft.json', import.meta.url), 'utf8')) as CityData;
+const g = createGameFromData(null, [data], 'delft');
+const c = g.cities[0];
+c.def = { ...c.def, population: 931_000 };
+g.speed = 30;
+while (g.time < 16.5 * 60) g.tick(1 / 60);
+g.speed = 1;
+const t0 = performance.now();
+for (let i = 0; i < 1800; i++) g.tick(1 / 60);
+console.log('avg', ((performance.now() - t0) / 1800).toFixed(2), c.traffic.active);

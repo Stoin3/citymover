@@ -55,12 +55,14 @@ export function emptyStats(): CityStats {
 }
 
 const ZONE_SIZE = 500;
+/** share of trips for which a car is available (driver or passenger) */
+const CAR_AVAILABILITY = 0.72;
 // Accident probability per car agent passing a junction, per control type.
 // Agents are ~1:1 with real trips, so these are per real car (RISK_SCALE keeps a
 // handful of accidents per day in a default city of ~100k inhabitants).
-const RISK_SCALE = 0.1;
+const RISK_SCALE = 0.04;
 const JRISK = [2.2e-4, 3.5e-5, 2.5e-5, 1.6e-5, 7e-6, 6e-6].map((r) => r * RISK_SCALE);
-const EDGE_RISK = 1.2e-6 * RISK_SCALE;
+const EDGE_RISK = 1.2e-6 * 0.08;
 const PURPOSE_MIX_AM = [0.62, 0.04, 0.28, 0.06];
 const PURPOSE_MIX_PM = [0.05, 0.52, 0.13, 0.3];
 const PURPOSE_MIX_OFF = [0.12, 0.13, 0.4, 0.35];
@@ -547,12 +549,12 @@ export class CitySim {
     const k = o * this.Z + d;
     const dNet = dEuclid * 1.3 + 100;
     const walkT = dNet / 1.3 / 60;
-    const uWalk = -walkT - Math.max(0, walkT - 25) * 1.5;
+    const uWalk = -walkT - Math.max(0, walkT - 12) * 0.6 - Math.max(0, walkT - 25) * 1.5;
     const bikeT = dNet / 4.4 / 60 + 2;
     const uBike = Math.random() < 0.78 ? -5 - 1.5 * bikeT - Math.max(0, bikeT - 20) * 0.8 : -Infinity;
     const carT = this.carSkim[k] + 5;
     const carCost = (dNet / 1000) * CAR_COST_KM + this.zones[d].parking;
-    const uCar = Math.random() < 0.55 ? -7 - carT - carCost / VALUE_OF_TIME : -Infinity;
+    const uCar = Math.random() < CAR_AVAILABILITY ? -7 - carT - carCost / VALUE_OF_TIME : -Infinity;
     const gc = this.ptCost[k];
     const uPt = isFinite(gc) ? PT_ASC + (this.reputation - 60) / 12 - gc : -Infinity;
     const m = Math.max(uWalk, uBike, uCar, uPt);
@@ -587,7 +589,10 @@ export class CitySim {
     if (!bike) this.G.arcLoad[path[0]]++;
   }
 
-  private tmp = new Float64Array(3);
+  private tmp = new Float64Array(5);
+  private spStamp = new Uint32Array(0);
+  private spCache = new Float32Array(0);
+  private spGen = 0;
 
   /** advance cars & bikes by dt seconds; positions (x/y/h) are refreshed when `positions` is true */
   tickTraffic(dt: number, now: number, onAccident: (a: Accident) => void, positions = true): void {
@@ -599,7 +604,16 @@ export class CitySim {
       arcIdx = T.arcIdx,
       sA = T.s,
       wait = T.wait,
-      hint = T.hint;
+      hint = T.hint,
+      moved = T.moved;
+    // car speed per arc is computed at most once per sub-step
+    if (this.spStamp.length !== G.nE * 2) {
+      this.spStamp = new Uint32Array(G.nE * 2);
+      this.spCache = new Float32Array(G.nE * 2);
+    }
+    const spStamp = this.spStamp,
+      spCache = this.spCache,
+      gen = ++this.spGen;
     const eLen = G.eLen,
       arcLoad = G.arcLoad,
       arcBlock = G.arcBlock,
@@ -607,20 +621,32 @@ export class CitySim {
       jCount = this.jCount;
     for (let i = 0, n = T.count; i < n; i++) {
       if (!alive[i]) continue;
-      let w = wait[i];
+      let tMove = dt;
+      const w = wait[i];
       if (w > 0) {
-        w -= dt;
-        wait[i] = w;
-        if (w > 0) continue;
+        if (w >= dt) {
+          wait[i] = w - dt;
+          continue;
+        }
+        // time left over after a junction wait counts as driving time
+        tMove = dt - w;
+        wait[i] = 0;
       }
       const path = paths[i]!;
       const bike = modeA[i] === 1;
       let ai = arcIdx[i];
       let arc = path[ai];
-      const v = bike ? (arcBlock[arc] > now ? 2 : 4.4) : G.arcSpeed(arc, 'car', now);
-      // time left over after a junction wait counts as driving time
-      let s = sA[i] + v * (w < 0 ? Math.min(dt, -w) : dt);
+      let v: number;
+      if (bike) v = arcBlock[arc] > now ? 2 : 4.4;
+      else if (spStamp[arc] === gen) v = spCache[arc];
+      else {
+        v = G.arcSpeed(arc, 'car', now);
+        spCache[arc] = v;
+        spStamp[arc] = gen;
+      }
+      let s = sA[i] + v * tMove;
       let len = eLen[arc >> 1];
+      moved[i] = 1;
       if (s < len) {
         sA[i] = s;
         continue;
@@ -673,6 +699,7 @@ export class CitySim {
       G = this.G;
     const tmp = this.tmp;
     const alive = T.alive,
+      moved = T.moved,
       paths = T.paths,
       arcIdx = T.arcIdx,
       sA = T.s,
@@ -682,14 +709,15 @@ export class CitySim {
       H = T.h,
       modeA = T.mode;
     for (let i = 0, n = T.count; i < n; i++) {
-      if (!alive[i]) continue;
+      if (!moved[i] || !alive[i]) continue;
+      moved[i] = 0;
       const arc = paths[i]![arcIdx[i]];
-      hint[i] = G.pointOnArc(arc, sA[i], tmp, hint[i]);
+      hint[i] = G.arcPos(arc, sA[i], tmp, hint[i]);
       const off = modeA[i] === 1 ? 3.6 : 1.7;
-      const h = tmp[2];
-      X[i] = tmp[0] + Math.sin(h) * off;
-      Y[i] = tmp[1] - Math.cos(h) * off;
-      H[i] = h;
+      // offset to the right-hand side of the road
+      X[i] = tmp[0] + tmp[4] * off;
+      Y[i] = tmp[1] - tmp[3] * off;
+      H[i] = tmp[2];
     }
   }
 

@@ -150,12 +150,14 @@ export class TrafficPool {
   x: Float32Array;
   y: Float32Array;
   h: Float32Array;
+  moved: Uint8Array; // position needs recomputing
   paths: (Int32Array | null)[];
   free: number[] = [];
 
   constructor(cap = 4096) {
     this.cap = cap;
     this.alive = new Uint8Array(cap);
+    this.moved = new Uint8Array(cap);
     this.mode = new Uint8Array(cap);
     this.arcIdx = new Int32Array(cap);
     this.s = new Float32Array(cap);
@@ -175,6 +177,7 @@ export class TrafficPool {
       return b;
     };
     this.alive = g(this.alive, Uint8Array);
+    this.moved = g(this.moved, Uint8Array);
     this.mode = g(this.mode, Uint8Array);
     this.arcIdx = g(this.arcIdx, Int32Array);
     this.s = g(this.s, Float32Array);
@@ -197,6 +200,7 @@ export class TrafficPool {
     }
     this.active++;
     this.alive[i] = 1;
+    this.moved[i] = 1;
     return i;
   }
 

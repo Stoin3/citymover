@@ -49,7 +49,7 @@ export class Router {
   trees = new Map<number, RouteTree>();
   maxTrees: number;
   /** car trees older than this (game minutes) are rebuilt in the background */
-  carTtl = 20;
+  carTtl = 30;
   /** called whenever a tree finished building */
   onBuilt: ((t: RouteTree) => void) | null = null;
   stats = { built: 0, ms: 0, evicted: 0 };
@@ -147,13 +147,18 @@ export class Router {
     return p;
   }
 
-  /** do queued tree builds until performance.now() reaches deadline */
-  work(deadline: number, now: number): void {
+  /**
+   * Do queued tree builds until performance.now() reaches `deadline`.
+   * Background refreshes (trees that exist but are stale) only run until `refreshDeadline`.
+   */
+  work(deadline: number, now: number, refreshDeadline = deadline): void {
     const t0 = performance.now();
     if (t0 >= deadline) return;
     for (;;) {
       if (this.bKey < 0) {
-        const k = this.hi.length ? this.hi.shift()! : this.lo.length ? this.lo.shift()! : -1;
+        let k = -1;
+        if (this.hi.length) k = this.hi.shift()!;
+        else if (this.lo.length && performance.now() < refreshDeadline) k = this.lo.shift()!;
         if (k < 0) break;
         this.queued.delete(k);
         this.start(k, now);

@@ -82,7 +82,9 @@ export class TransitNet {
       const dir = l.dirs[d];
       if (k + 1 < dir.stops.length) {
         const km = (dir.stopDist[k + 1] - dir.stopDist[k]) / 1000;
-        const crowd = l.crowding > 0.85 ? 1 + (l.crowding - 0.85) * 3 : 1;
+        // crowded segments (or passengers being left behind) feel slower
+        const cr = Math.max(l.crowding, dir.load[k] ?? 0);
+        const crowd = cr > 0.85 ? 1 + (cr - 0.85) * 3 : 1;
         lists[i].push({ to: i + 1, c: (dir.segTime[k] / 60) * crowd + (l.d.fareKm * km) / VALUE_OF_TIME });
       }
       if (k === 0) continue; // can't alight at the first stop

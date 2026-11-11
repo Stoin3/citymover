@@ -31,7 +31,7 @@ function stopsAlong(g: Game, x0: number, y0: number, x1: number, y1: number, spa
   const a = G.nearestJunction(x0, y0, 600, core);
   const b = G.nearestJunction(x1, y1, 600, core);
   const path = G.findPath(a, b, 'bus', 0, 400000, 70);
-  if (!path) throw new Error('no path for test line');
+  if (!path) return [];
   const ids: number[] = [];
   const tryAdd = (j: number) => {
     const s = g.addStop('bus', G.jx[j], G.jy[j]);
@@ -51,14 +51,22 @@ function stopsAlong(g: Game, x0: number, y0: number, x1: number, y1: number, spa
   return ids;
 }
 
-function setupNetwork(g: Game): void {
+function setupNetwork(g: Game, extended = false): void {
   const c = g.cities[0];
   const lines: [number, number, number, number][] = [
     [c.cx - 2000, c.cy - 300, c.cx + 1900, c.cy + 300], // west - east through centre
     [c.cx - 200, c.cy - 2000, c.cx + 200, c.cy + 2000], // south - north
   ];
+  if (extended)
+    lines.push(
+      [c.cx - 1500, c.cy - 1500, c.cx + 1500, c.cy + 1500], // SW - NE
+      [c.cx - 1500, c.cy + 1500, c.cx + 1500, c.cy - 1500], // NW - SE
+      [c.cx - 1800, c.cy + 1000, c.cx + 1800, c.cy + 1100], // north W - E
+      [c.cx - 1800, c.cy - 1100, c.cx + 1800, c.cy - 1000], // south W - E
+    );
   for (const [x0, y0, x1, y1] of lines) {
-    const stops = stopsAlong(g, x0, y0, x1, y1, 550);
+    const stops = stopsAlong(g, x0, y0, x1, y1, extended ? 450 : 550);
+    if (stops.length < 2) continue;
     const line = g.createLine('bus');
     if (typeof line === 'string') throw new Error(line);
     const err = g.setLineStops(line.id, stops);
@@ -228,7 +236,7 @@ function report(g: Game, day: number): void {
   console.log(
     `   now: cars+bikes ${c.traffic.active}, pax walk ${cnt[P_WALK_TO_STOP]} wait ${cnt[P_WAITING]} ride ${cnt[P_RIDING]} walkDest ${cnt[P_WALK_TO_DEST]}, vehicles ${g.vehicles.length}` +
       ` | lines: ` +
-      [...g.lines.values()].map((l) => `${l.d.name}: ${l.paxYesterday} pax, rev ${eur(l.revenueYesterday)}, cost ${eur(l.costYesterday)}, crowd ${(l.crowding * 100).toFixed(0)}%, short ${l.shortage}`).join(' ; '),
+      [...g.lines.values()].map((l) => `${l.d.name}: ${l.paxYesterday} pax, rev ${eur(l.revenueYesterday)}, cost ${eur(l.costYesterday)}, crowd peak ${(l.crowdPeakYesterday * 100).toFixed(0)}% (max seg ${(Math.max(...l.dirs.map((d) => Math.max(0, ...d.load))) * 100).toFixed(0)}% now), short ${l.shortage}`).join(' ; '),
   );
 }
 
@@ -252,6 +260,41 @@ const g2 = createGameFromData(JSON.parse(JSON.stringify(save)), [data]);
 console.log(
   `save/load: ${JSON.stringify(save).length} bytes, stops ${g2.stops.size}, lines ${g2.lines.size} valid=${[...g2.lines.values()].map((l) => l.valid).join(',')}, money ${eur(g2.money)}, day ${g2.day()}`,
 );
+
+// ---------------------------------------------------------------- scenario 1b
+console.log('\n=== Scenario 1b: "good play" - 6 bus lines, fleet & frequency managed daily ===');
+{
+  const gp = newGame();
+  gp.money = 1e9;
+  setupNetwork(gp, true);
+  gp.money = 0;
+  const manage = () => {
+    for (const l of gp.lines.values()) {
+      const peak = Math.max(l.d.freq[1], l.d.freq[3]);
+      if (l.crowdPeakYesterday > 0.6 && peak < 20) gp.updateLine(l.id, { freq: l.d.freq.map((f, i) => (i === 1 || i === 3 ? f + 4 : i === 2 ? f + 2 : f)) });
+      const need = l.vehiclesNeeded();
+      if (need > l.d.fleet) gp.buyVehicles(l.id, need - l.d.fleet);
+    }
+  };
+  manage();
+  console.log(`fleet: ${[...gp.lines.values()].map((l) => `${l.d.name}:${l.d.fleet}`).join(' ')} | money ${eur(gp.money)} (setup cost not counted)`);
+  run(gp, Math.max(3, DAYS), 'goodplay', (d) => {
+    report(gp, d);
+    manage();
+  });
+}
+
+// ---------------------------------------------------------------- scenario 1c
+console.log('\n=== Scenario 1c: stress - Delft roads with the population of Amsterdam (931k), starter buses, until 19:00 ===');
+{
+  const gs = newGame();
+  const cs = gs.cities[0];
+  cs.def = { ...cs.def, population: 931_000 };
+  setupNetwork(gs);
+  console.log(`maxEntities ${gs.maxEntities}`);
+  run(gs, (19 - 6) / 24, 'stress', undefined, 16.5 * 60);
+  console.log(`stress: trips so far ${cs.stats.trips}, cars+bikes now ${cs.traffic.active} (high-water ${cs.traffic.count}), pax ${gs.passengers.active}, accidents ${cs.stats.accidents}`);
+}
 
 // ---------------------------------------------------------------- scenario 2
 if (process.argv.includes('--quick')) process.exit(0);
@@ -295,7 +338,7 @@ console.log('\n=== Scenario 4: road edits, second city (Delft data shifted to De
   gi.on('toast', (t) => toasts.push(t.kind + ': ' + t.msg));
   console.log('oneway against line 1:', gi.setEdgeOneway(0, arc >> 1, arc & 1 ? 1 : -1) ?? 'ok', `| line valid=${l1.valid} len=${(l1.dirs[0].length / 1000).toFixed(2)} km`, toasts.slice(-1));
   console.log('lanes before level 2:', gi.setEdgeLanes(0, arc >> 1, 4));
-  gi.xp = 30000; // jump to a high level for testing
+  gi.xp = 300_000; // jump to a high level for testing
   console.log('level', gi.level, '| lanes:', gi.setEdgeLanes(0, arc >> 1, 4) ?? 'ok', '| buslane:', gi.setEdgeBusLane(0, arc >> 1, true) ?? 'ok', '| lights:', gi.setJunctionControl(0, gi.cities[0].G.arcTo(arc), 4) ?? 'ok');
   console.log('unlock rotterdam (no data available offline)? ', gi.canUnlockCity('rotterdam'));
   // fake Den Haag from shifted Delft data

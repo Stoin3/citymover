@@ -33,6 +33,8 @@ const MAX_PASSENGERS = 150_000;
 /** wall-clock budget (ms) per frame for building car/bike route trees */
 const ROUTE_MS_SLOW = 1.5;
 const ROUTE_MS_FAST = 3;
+/** at most this much of it (ms) for refreshing existing (congestion-aware) car trees */
+const ROUTE_REFRESH_MS = 0.75;
 /** wall-clock budget (ms) for all simulation work in one frame; excess game time is dropped */
 const FRAME_BUDGET_MS = 12;
 /** simulation sub-step (game seconds) */
@@ -98,6 +100,8 @@ export class Game implements IGame {
   effectiveSpeed = 1;
   /** last frame's simulation time (ms) */
   frameMs = 0;
+  /** smoothed cost of one simulation sub-step (ms) */
+  private stepMs = 0;
   nextId = 1;
   intercity: Intercity;
 
@@ -612,6 +616,7 @@ export class Game implements IGame {
       nd.nextDispatch = od.nextDispatch;
       if (keep && od.waiting.length === nd.stops.length) nd.waiting = od.waiting;
       if (keep && od.segTime.length === nd.segTime.length) nd.segTime = od.segTime;
+      if (keep && od.load.length === nd.load.length) nd.load = od.load;
     }
     if (keep) {
       for (const v of line.vehicles) {
@@ -914,13 +919,19 @@ export class Game implements IGame {
     // background route tree building, bounded in wall-clock time
     const routeMs = this.speed <= 3 ? ROUTE_MS_SLOW : ROUTE_MS_FAST;
     const per = routeMs / Math.max(1, this.cities.length);
-    for (const c of this.cities) c.router.work(performance.now() + per, this.time);
+    for (const c of this.cities) {
+      const t = performance.now();
+      c.router.work(t + per, this.time, t + Math.min(per, ROUTE_REFRESH_MS));
+    }
     let done = 0;
     for (let i = 0; i < n; i++) {
+      const ts = performance.now();
+      // never freeze the browser: drop the rest of this frame's game time when the
+      // next sub-step would not fit in the frame budget (always do at least one)
+      if (i > 0 && ts - t0 + this.stepMs > FRAME_BUDGET_MS) break;
       this.step(dt);
       done++;
-      // never freeze the browser: drop the rest of this frame's game time when over budget
-      if (performance.now() - t0 > FRAME_BUDGET_MS) break;
+      this.stepMs = this.stepMs * 0.8 + (performance.now() - ts) * 0.2;
     }
     for (const c of this.cities) c.updateTrafficPositions();
     const ach = (this.speed * done) / n;
@@ -969,6 +980,7 @@ export class Game implements IGame {
     for (const line of this.lines.values()) {
       if (line.loadSamples > 0) {
         line.crowding = line.loadSum / line.loadSamples;
+        if (line.crowding > line.crowdPeak) line.crowdPeak = line.crowding;
         line.loadSum = 0;
         line.loadSamples = 0;
       } else line.crowding *= 0.5;
@@ -1020,6 +1032,8 @@ export class Game implements IGame {
       line.revenueToday = 0;
       line.costToday = 0;
       line.shortage = 0;
+      line.crowdPeakYesterday = line.crowdPeak;
+      line.crowdPeak = 0;
     }
     for (const s of this.stops.values()) s.boardedToday = 0;
     this.emit('day', { day: this.day(), ledger: this.ledgerYesterday });
@@ -1252,7 +1266,9 @@ export class Game implements IGame {
       stop.boardedToday += board;
     }
     // passengers left behind at the stop make the line feel (and count as) overcrowded
-    line.loadSum += Math.min(2, (pax.length + left) / def.capacity);
+    const lf = Math.min(2, (pax.length + left) / def.capacity);
+    line.loadSum += lf;
+    if (k < dir.load.length) dir.load[k] = dir.load[k] * 0.75 + lf * 0.25;
     line.loadSamples++;
     v.nextStop = k + 1;
     v.dwell = def.dwell + 1.2 * (alight + board);
