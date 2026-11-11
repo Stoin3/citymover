@@ -1,0 +1,26 @@
+{
+  "name": "citymover",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "fetch-city": "node scripts/fetch-city.mjs"
+  },
+  "dependencies": {
+    "@deck.gl/core": "^9.4.1",
+    "@deck.gl/layers": "^9.4.1",
+    "@deck.gl/mapbox": "^9.4.1",
+    "@deck.gl/mesh-layers": "^9.4.1",
+    "@luma.gl/engine": "^9.4.2",
+    "@supabase/supabase-js": "^2.119.0",
+    "maplibre-gl": "^6.17.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}
