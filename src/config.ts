@@ -30,19 +30,19 @@ export const MODES: Record<ModeId, ModeDef> = {
   bus: {
     id: 'bus', name: 'Bus', icon: '🚌', color: [230, 57, 70], unlockLevel: 1, capacity: 90, cruiseKmh: 70,
     vehiclePrice: 120_000, opCostHour: 18, opCostKm: 0.25, stopCost: 4_000, infraPerKm: 0, dwell: 12,
-    routing: 'road', defaultFareBase: 1.1, defaultFareKm: 0.18, dims: [12, 2.55, 3.2], z: 0, stopRadius: 450,
+    routing: 'road', defaultFareBase: 1.1, defaultFareKm: 0.18, dims: [12, 2.55, 3.2], z: 0, stopRadius: 600,
     minStopSpacing: 150, intercity: false,
   },
   tram: {
     id: 'tram', name: 'Tram', icon: '🚋', color: [255, 183, 3], unlockLevel: 3, capacity: 220, cruiseKmh: 60,
     vehiclePrice: 900_000, opCostHour: 40, opCostKm: 0.6, stopCost: 30_000, infraPerKm: 600_000, dwell: 15,
-    routing: 'tram', defaultFareBase: 1.1, defaultFareKm: 0.18, dims: [30, 2.4, 3.4], z: 0, stopRadius: 550,
+    routing: 'tram', defaultFareBase: 1.1, defaultFareKm: 0.18, dims: [30, 2.4, 3.4], z: 0, stopRadius: 700,
     minStopSpacing: 250, intercity: false,
   },
   metro: {
     id: 'metro', name: 'Metro', icon: '🚇', color: [58, 134, 255], unlockLevel: 5, capacity: 900, cruiseKmh: 80,
     vehiclePrice: 4_000_000, opCostHour: 120, opCostKm: 1.8, stopCost: 1_500_000, infraPerKm: 5_000_000, dwell: 20,
-    routing: 'straight', defaultFareBase: 1.1, defaultFareKm: 0.18, dims: [70, 2.9, 3.6], z: 0, stopRadius: 800,
+    routing: 'straight', defaultFareBase: 1.1, defaultFareKm: 0.18, dims: [70, 2.9, 3.6], z: 0, stopRadius: 900,
     minStopSpacing: 500, intercity: false,
   },
   train: {
@@ -54,7 +54,7 @@ export const MODES: Record<ModeId, ModeDef> = {
   coach: {
     id: 'coach', name: 'Snelbus', icon: '🚍', color: [112, 224, 0], unlockLevel: 4, capacity: 65, cruiseKmh: 100,
     vehiclePrice: 280_000, opCostHour: 26, opCostKm: 0.35, stopCost: 15_000, infraPerKm: 0, dwell: 30,
-    routing: 'highway', defaultFareBase: 2.5, defaultFareKm: 0.12, dims: [14, 2.55, 3.6], z: 0, stopRadius: 700,
+    routing: 'highway', defaultFareBase: 2.5, defaultFareKm: 0.12, dims: [14, 2.55, 3.6], z: 0, stopRadius: 800,
     minStopSpacing: 1000, intercity: true,
   },
   plane: {
@@ -108,7 +108,7 @@ export const FEATURES: FeatureDef[] = [
 
 export function xpForLevel(level: number): number {
   if (level <= 1) return 0;
-  return Math.round(350 * Math.pow(level - 1, 1.75));
+  return Math.round(1000 * Math.pow(level - 1, 1.8));
 }
 
 export function levelFromXp(xp: number): number {
@@ -137,6 +137,11 @@ export const BETA = 0.075; // logit scale per minute
 export const CAR_COST_KM = 0.22;
 export const PARKING_CENTER = 4.0;
 export const MAX_WAIT_MIN = 40;
+// Transit generalized-cost weights (minutes of in-vehicle time per minute)
+export const PT_WALK_WEIGHT = 1.5;
+export const PT_WAIT_WEIGHT = 1.5;
+export const PT_TRANSFER_PENALTY = 5;
+export const PT_ASC = -2; // alternative-specific constant for transit (minutes)
 
 // Road safety
 export const SAFE_SPEED: number[] = [120, 100, 70, 60, 50, 50, 30, 15, 80, 70, 60, 50, 50];
@@ -152,3 +157,14 @@ export const CONTROL_NAMES = ['Geen regeling', 'Voorrang van rechts', 'Voorrangs
 export const CONTROL_FEATURE = ['priority', 'priority', 'priority', 'priority', 'signals', 'roundabout'];
 export const CONTROL_COST = [0, 0, 2_000, 1_500, 60_000, 250_000];
 export const ROAD_EDIT_COST = { speed: 500, oneway: 2_000, buslane: 15_000, lanes: 40_000 };
+
+// Economy (game core)
+export const ACCIDENT_CLAIM = 1_500; // damage claims paid per road accident in your cities
+export const BUS_ACCIDENT_REPAIR = 20_000; // extra when one of your vehicles is involved
+// Daily municipal subsidy per city = population/1000 * SUBSIDY_PER_1000 * service * safety + delivered * SUBSIDY_PER_PAX
+//   service = min(1, delivered / (population/1000 * SUBSIDY_FULL_PAX_PER_1000))
+//   safety  = 1 - min(0.8, accidents * 0.03)
+export const SUBSIDY_PER_1000 = 600;
+export const SUBSIDY_FULL_PAX_PER_1000 = 30;
+export const SUBSIDY_PER_PAX = 0.3; // daily subsidy per delivered passenger
+export const VEHICLE_RESALE = 0.5; // fraction of the price refunded when selling vehicles

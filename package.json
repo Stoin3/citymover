@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "fetch-city": "node scripts/fetch-city.ts"
+    "fetch-city": "node scripts/fetch-city.ts",
+    "smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
     "@deck.gl/core": "^9.4.1",

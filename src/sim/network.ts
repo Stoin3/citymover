@@ -2,7 +2,7 @@
 import { Grid } from '../geo';
 import { MinHeap } from './heap';
 import { Line, Stop } from './transit';
-import { VALUE_OF_TIME } from '../config';
+import { VALUE_OF_TIME, MODES, PT_WALK_WEIGHT, PT_WAIT_WEIGHT, PT_TRANSFER_PENALTY } from '../config';
 
 export const WALK_SPEED = 1.3; // m/s
 export const WALK_DETOUR = 1.25;
@@ -96,7 +96,7 @@ export class TransitNet {
           if (l2 === l && nodeDir[j] === d) continue;
           const dir2 = l2.dirs[nodeDir[j]];
           if (nodeK[j] >= dir2.stops.length - 1) continue; // can't board at last stop
-          const c = walkMin(dd) * 1.8 + l2.expectedWait(block) * 1.5 + 5 + l2.d.fareBase / VALUE_OF_TIME;
+          const c = walkMin(dd) * PT_WALK_WEIGHT + l2.expectedWait(block) * PT_WAIT_WEIGHT + PT_TRANSFER_PENALTY + l2.d.fareBase / VALUE_OF_TIME;
           lists[i].push({ to: j, c });
         }
       });
@@ -131,7 +131,7 @@ export class TransitNet {
         const l = this.nodeLine[j];
         const dir = l.dirs[this.nodeDir[j]];
         if (this.nodeK[j] >= dir.stops.length - 1) continue;
-        res.push([j, extraMin + walkMin(dd) * 1.8 + l.expectedWait(this.block) * 1.5 + l.d.fareBase / VALUE_OF_TIME]);
+        res.push([j, extraMin + walkMin(dd) * PT_WALK_WEIGHT + l.expectedWait(this.block) * PT_WAIT_WEIGHT + l.d.fareBase / VALUE_OF_TIME]);
       }
     });
     return res;
@@ -147,7 +147,7 @@ export class TransitNet {
       if (dd > (ignoreRadius ? maxWalk : Math.min(maxWalk, radiusFor(s)))) return;
       for (const j of this.stopNodes.get(s) || []) {
         if (this.nodeK[j] === 0) continue;
-        res.push([j, extraMin + walkMin(dd) * 1.8]);
+        res.push([j, extraMin + walkMin(dd) * PT_WALK_WEIGHT]);
       }
     });
     return res;
@@ -169,7 +169,7 @@ export class TransitNet {
     while (h.size) {
       const u = h.pop();
       const du = h.lastPri;
-      if (du > dist[u] || du > limit) continue;
+      if (du > dist[u] + 1e-3 || du > limit) continue; // dist is float32: allow rounding
       for (let k = this.outStart[u], ke = this.outStart[u + 1]; k < ke; k++) {
         const v = this.outTo[k];
         const c = du + this.outCost[k];
@@ -203,28 +203,21 @@ export class TransitNet {
       }
       cur = p;
     }
-    // out holds legs in reverse order
-    const legs = new Int32Array(out.length);
+    // out holds legs in reverse order; drop zero-length legs (board == alight,
+    // e.g. "walk to a stop and transfer on foot to another one")
     const nl = out.length / 4;
-    for (let i = 0; i < nl; i++) legs.set(out.slice((nl - 1 - i) * 4, (nl - i) * 4), i * 4);
+    let keep = 0;
+    for (let i = 0; i < nl; i++) if (out[i * 4 + 3] > out[i * 4 + 2]) keep++;
+    const legs = new Int32Array(keep * 4);
+    let w = 0;
+    for (let i = nl - 1; i >= 0; i--) {
+      if (out[i * 4 + 3] <= out[i * 4 + 2]) continue;
+      for (let q = 0; q < 4; q++) legs[w++] = out[i * 4 + q];
+    }
     return legs;
   }
 }
 
 export function radiusFor(s: Stop): number {
-  switch (s.d.mode) {
-    case 'bus':
-      return 450;
-    case 'tram':
-      return 550;
-    case 'metro':
-      return 800;
-    case 'train':
-      return 1200;
-    case 'coach':
-      return 700;
-    case 'plane':
-      return 3000;
-  }
-  return 500;
+  return MODES[s.d.mode]?.stopRadius || 3000;
 }

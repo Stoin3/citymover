@@ -6,7 +6,7 @@ import { RoadGraph, CAR_WEIGHT, CTRL_NONE, CTRL_RIGHT, CTRL_PRIORITY, CTRL_STOP,
 import { TrafficPool } from './agents';
 import { TransitNet } from './network';
 import {
-  HOURLY_DEMAND, TRIPS_PER_RESIDENT, VALUE_OF_TIME, BETA, CAR_COST_KM, PARKING_CENTER, SAFE_SPEED, CLASS_RANK,
+  HOURLY_DEMAND, TRIPS_PER_RESIDENT, VALUE_OF_TIME, BETA, CAR_COST_KM, PARKING_CENTER, SAFE_SPEED, CLASS_RANK, PT_ASC,
 } from '../config';
 
 export interface Zone {
@@ -80,6 +80,44 @@ function sampleCum(c: Float64Array, off = 0, n = c.length): number {
   return lo;
 }
 
+/** Rail ways split at OSM stations and every ~400 m so that stations can be placed anywhere on the track. */
+function splitRails(data: CityData): { n: number[]; c: number; o: number; s: number; l: number }[] {
+  const nodes = data.nodes;
+  const stations = data.stations.filter((st) => st.t === 0).map((st) => [toX(st.lon), toY(st.lat)]);
+  const out: { n: number[]; c: number; o: number; s: number; l: number }[] = [];
+  for (const r of data.rails) {
+    if (r.t !== 0 && r.t !== 2) continue;
+    const n = r.n;
+    const xs = n.map((k) => toX(nodes[k * 2])),
+      ys = n.map((k) => toY(nodes[k * 2 + 1]));
+    // nodes closest to a station
+    const cut = new Set<number>();
+    for (const [sx, sy] of stations) {
+      let bi = -1,
+        bd = 400;
+      for (let i = 1; i < n.length - 1; i++) {
+        const d = Math.hypot(xs[i] - sx, ys[i] - sy);
+        if (d < bd) {
+          bd = d;
+          bi = i;
+        }
+      }
+      if (bi > 0) cut.add(bi);
+    }
+    let start = 0,
+      acc = 0;
+    for (let i = 1; i < n.length; i++) {
+      acc += Math.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1]);
+      if (i === n.length - 1 || cut.has(i) || acc >= 400) {
+        out.push({ n: n.slice(start, i + 1), c: r.t, o: 0, s: 0, l: 1 });
+        start = i;
+        acc = 0;
+      }
+    }
+  }
+  return out;
+}
+
 export function posKey(x: number, y: number): string {
   return Math.round(x) + '_' + Math.round(y);
 }
@@ -129,9 +167,7 @@ export class CitySim {
     this.cy = toY(def.lat);
     this.radius = data.radius * 1000;
     this.G = RoadGraph.build(data.nodes, data.ways, data.sig);
-    const railWays = data.rails
-      .filter((r) => r.t === 0 || r.t === 2)
-      .map((r) => ({ n: r.n, c: r.t, o: 0, s: 0, l: 1 }));
+    const railWays = splitRails(data);
     this.R = railWays.length ? RoadGraph.build(data.nodes, railWays, [], true) : null;
     this.jCount = new Float32Array(this.G.nJ);
     this.computeCore();
@@ -367,6 +403,7 @@ export class CitySim {
         let best = Infinity,
           bn = -1;
         for (const [node, c] of egress[dd]) {
+          if (pred[node] < 0) continue; // board and alight at the same stop is not a trip
           const v = dist[node] + c;
           if (v < best) {
             best = v;
@@ -469,7 +506,7 @@ export class CitySim {
     const carCost = (dNet / 1000) * CAR_COST_KM + this.zones[d].parking;
     const uCar = Math.random() < 0.55 ? -7 - carT - carCost / VALUE_OF_TIME : -Infinity;
     const gc = this.ptCost[k];
-    const uPt = isFinite(gc) ? -2 + (this.reputation - 60) / 12 - gc : -Infinity;
+    const uPt = isFinite(gc) ? PT_ASC + (this.reputation - 60) / 12 - gc : -Infinity;
     const m = Math.max(uWalk, uBike, uCar, uPt);
     const eW = Math.exp(BETA * (uWalk - m)),
       eB = Math.exp(BETA * (uBike - m)),
@@ -597,8 +634,9 @@ export class CitySim {
   private checkEdgeAccident(arc: number, now: number, onAccident: (a: Accident) => void): void {
     const G = this.G;
     const e = arc >> 1;
+    // real-world (OSM) limits never count as "too fast"; only player increases above the safe speed do
     const limit = G.eSpeed[e],
-      safe = SAFE_SPEED[G.eCls[e]] ?? 50;
+      safe = Math.max(SAFE_SPEED[G.eCls[e]] ?? 50, G.eSpeedOsm[e]);
     if (limit <= safe) return;
     const p = 1.2e-6 * (G.eLen[e] / 100) * Math.exp((limit - safe) / 9) * (1 + G.arcLoad[arc] * 0.05);
     if (Math.random() < p) {
