@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CityMover renderer harness</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0b1020; font-family: system-ui, sans-serif; }
+      #map { position: absolute; inset: 0; }
+      #status { position: absolute; left: 10px; top: 10px; z-index: 5; background: rgba(10, 16, 36, .8); color: #fff;
+        padding: 6px 10px; border-radius: 6px; font-size: 12px; }
+      #ctl { position: absolute; right: 10px; top: 10px; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; max-width: 380px; }
+      #ctl button { font-size: 12px; padding: 4px 8px; border-radius: 5px; border: 0; background: #fff; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="status">laden…</div>
+    <div id="ctl">
+      <button data-mode="view">view</button>
+      <button data-mode="roads">roads</button>
+      <button data-mode="build">build</button>
+      <button data-ov="none">geen</button>
+      <button data-ov="congestion">congestie</button>
+      <button data-ov="safety">veiligheid</button>
+      <button data-ov="demand">vraag</button>
+    </div>
+    <script type="module" src="/src/render/harness.ts"></script>
+    <script type="module">
+      document.getElementById('ctl').addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        const h = window.harness;
+        if (!b || !h) return;
+        if (b.dataset.mode) h.renderer.setMode(b.dataset.mode, 'bus');
+        if (b.dataset.ov) h.renderer.setOverlay(b.dataset.ov);
+      });
+    </script>
+  </body>
+</html>
